@@ -1,0 +1,11 @@
+# Telegram Bot
+python-telegram-bot>=20.0,<21.0
+
+# PostgreSQL
+asyncpg>=0.31.0
+
+# Environment
+python-dotenv>=1.2.1
+
+# Logging
+loguru>=0.7.3
