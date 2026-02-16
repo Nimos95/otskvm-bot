@@ -30,8 +30,8 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "Использование: /status <аудитория> <статус> [комментарий]\n\n"
             "Статусы: green, yellow, red\n"
-            "Пример: /status 501 green\n"
-            "Пример: /status 315 yellow Нет проектора"
+            "Пример: /status 130 green\n"
+            "Пример: /status 118 yellow Нет проектора"
         )
         return
 
