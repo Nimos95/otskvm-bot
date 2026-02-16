@@ -35,7 +35,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    _, auditory_name, status_arg = parts[:3]
+    _, auditory_name, status_arg = parts[2].lower()
     comment = parts[3] if len(parts) > 3 else None
 
     telegram_id = update.effective_user.id
