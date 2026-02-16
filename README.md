@@ -28,7 +28,7 @@
 | Поле | Тип | Описание |
 |------|-----|----------|
 | id | SERIAL (PK) | Внутренний ID |
-| name | VARCHAR(10) | Номер аудитории ('501', '315') |
+| name | VARCHAR(50) | Номер аудитории ('501', '315') |
 | building | VARCHAR(50) | Корпус |
 | floor | INTEGER | Этаж |
 | equipment | TEXT | Описание оборудования |
@@ -167,5 +167,6 @@
 | name | VARCHAR(100) | no_power / no_signal / broken_cable / software |
 | equipment_type_id | INTEGER (FK) | Связь с оборудованием |
 | description | TEXT | |
+
 
 ---
