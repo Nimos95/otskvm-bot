@@ -5,7 +5,7 @@ import logging
 
 from telegram.ext import Application, CommandHandler
 
-from config import Config, config
+from config import config
 from database import close_db_pool, init_db_pool
 from handlers import start, status, today
 
@@ -35,16 +35,33 @@ async def main() -> None:
 
     try:
         logger.info("Бот запущен")
-        await application.run_polling()
+        # Изменение: используем initialize() и start() вместо run_polling()
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        # Держим бота запущенным
+        while True:
+            await asyncio.sleep(3600)  # спим час, но можно и меньше
     except KeyboardInterrupt:
         logger.info("Получен KeyboardInterrupt, останавливаем бота...")
     except Exception as e:
         logger.critical("Ошибка при запуске бота: %s", e, exc_info=True)
-        return
     finally:
+        # Корректно останавливаем
+        if application.updater.running:
+            await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
         await close_db_pool()
         logger.info("Бот остановлен")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Создаём и устанавливаем event loop вручную
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main())
+    finally:
+        loop.close()
