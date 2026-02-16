@@ -35,7 +35,10 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    _, auditory_name, status_arg = parts[2].lower()
+    # Правильный парсинг
+    _, auditory_name, status_arg = parts[:3]
+    auditory_name = auditory_name.lower()
+    status_arg = status_arg.lower()
     comment = parts[3] if len(parts) > 3 else None
 
     telegram_id = update.effective_user.id
@@ -53,7 +56,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     if success:
-        status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status_arg.lower(), "")
+        status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status_arg, "")
         await update.message.reply_text(
             f"Статус аудитории {auditory_name}: {status_emoji} {status_arg.upper()}"
             + (f"\nКомментарий: {comment}" if comment else "")
