@@ -1,0 +1,64 @@
+# Виртуальное окружение
+venv/
+venv*/
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.exe
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+*.log
+*.pot
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Логи
+*.log
+logs/
+
+# Базы данных
+*.db
+*.sqlite3
+
+# Временные файлы
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Утилиты
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Проект-специфичные
+# (добавь сюда свои папки, если нужно)
