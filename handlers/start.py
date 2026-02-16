@@ -16,7 +16,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     Регистрирует пользователя в БД и отправляет приветственное сообщение.
     """
-    if not update.effective_user:
+    # Проверяем, что есть и пользователь, и сообщение
+    if not update.effective_user or not update.message:
         return
 
     user = update.effective_user
