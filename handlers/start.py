@@ -30,7 +30,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     await Database.update_user_last_active(telegram_id)
 
-    # Главное меню — только навигация, без статусов!
     keyboard = [
         [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
         [InlineKeyboardButton("📅 Расписание", callback_data="schedule_menu")],
@@ -44,3 +43,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Выберите действие в меню ниже:",
         reply_markup=reply_markup
     )
+
+
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отменяет текущее действие."""
+    if context.user_data.get("waiting_for"):
+        context.user_data["waiting_for"] = None
+        await update.message.reply_text("❌ Действие отменено")
+    else:
+        await update.message.reply_text("Нет активного действия для отмены")

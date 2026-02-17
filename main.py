@@ -3,12 +3,13 @@
 import asyncio
 import logging
 
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 from config import config
 from database import close_db_pool, init_db_pool
 from handlers import start, status, today
 from handlers.callback import callback_handler
+from handlers.message import message_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -32,11 +33,15 @@ async def main() -> None:
 
     # Регистрация обработчиков команд
     application.add_handler(CommandHandler("start", start.start_handler))
+    application.add_handler(CommandHandler("cancel", start.cancel_handler))
     application.add_handler(CommandHandler("status", status.status_handler))
     application.add_handler(CommandHandler("today", today.today_handler))
     
     # Регистрация обработчика inline-кнопок
     application.add_handler(CallbackQueryHandler(callback_handler))
+    
+    # Регистрация обработчика текстовых сообщений (для комментариев)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     try:
         logger.info("Бот запущен")
@@ -44,7 +49,6 @@ async def main() -> None:
         await application.start()
         await application.updater.start_polling()
         
-        # Держим бота запущенным
         while True:
             await asyncio.sleep(3600)
     except KeyboardInterrupt:
@@ -52,7 +56,6 @@ async def main() -> None:
     except Exception as e:
         logger.critical("Ошибка при запуске бота: %s", e, exc_info=True)
     finally:
-        # Корректно останавливаем
         if application.updater.running:
             await application.updater.stop()
         await application.stop()
