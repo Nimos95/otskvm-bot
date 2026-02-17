@@ -26,10 +26,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         status = waiting_for["status"]
         original_query = waiting_for.get("query")
         
-        # Очищаем состояние ожидания
         context.user_data["waiting_for"] = None
         
-        # Получаем название аудитории
         pool = get_db_pool()
         row = await pool.fetchrow("SELECT name FROM auditories WHERE id = $1", int(auditory_id))
         if not row:
@@ -40,7 +38,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         rus_name = get_russian_name(eng_name)
         full_name = update.effective_user.full_name or update.effective_user.first_name or "Пользователь"
         
-        # Добавляем статус с комментарием
         success = await Database.add_status(
             telegram_id=user_id,
             auditory_name=eng_name,
@@ -51,19 +48,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if success:
             status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status, "")
             
-            # Отправляем в группу, если настроено
             from config import config
-            if config.GROUP_CHAT_ID:
+            if config.GROUP_CHAT_ID and config.TOPIC_ID:
                 try:
                     await context.bot.send_message(
-                        config.GROUP_CHAT_ID,
-                        f"🔄 {full_name} обновил статус {rus_name}: {status_emoji} {status.upper()}\n"
-                        f"📝 Комментарий: {text}"
+                        chat_id=config.GROUP_CHAT_ID,
+                        message_thread_id=config.TOPIC_ID,
+                        text=f"🔄 {full_name} обновил статус {rus_name}: {status_emoji} {status.upper()}\n"
+                             f"📝 Комментарий: {text}"
                     )
                 except Exception as e:
-                    logger.error("Не удалось отправить уведомление в группу: %s", e)
+                    logger.error("Не удалось отправить уведомление в топик: %s", e)
             
-            # Создаём меню с действиями
             keyboard = [
                 [InlineKeyboardButton("📋 К списку аудиторий", callback_data="list_auditories")],
                 [InlineKeyboardButton("🔄 К этой аудитории", callback_data=f"aud_{auditory_id}")],
@@ -71,7 +67,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # Отвечаем пользователю
             await update.message.reply_text(
                 f"✅ Статус аудитории **{rus_name}** обновлён: {status_emoji} {status.upper()}\n"
                 f"📝 Комментарий: {text}\n\n"
@@ -80,7 +75,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 parse_mode="Markdown"
             )
         else:
-            # В случае ошибки
             keyboard = [
                 [InlineKeyboardButton("🔄 К аудитории", callback_data=f"aud_{auditory_id}")],
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
@@ -98,6 +92,3 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("❌ Действие отменено")
         else:
             await update.message.reply_text("Нет активного действия для отмены")
-    else:
-        # Игнорируем другие сообщения
-        pass

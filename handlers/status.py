@@ -43,11 +43,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     telegram_id = update.effective_user.id
     full_name = update.effective_user.full_name or update.effective_user.first_name or "Пользователь"
 
-    # Проверяем, не ввёл ли пользователь русское название
-    # Если да — преобразуем в английское для БД
     db_auditory_name = get_english_name(auditory_name)
-    
-    # Если преобразование не помогло, оставляем как есть (возможно, ввели английское)
     if db_auditory_name == auditory_name:
         db_auditory_name = auditory_name
 
@@ -56,15 +52,26 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     success = await Database.add_status(
         telegram_id=telegram_id,
-        auditory_name=db_auditory_name,  # в БД сохраняем английское
+        auditory_name=db_auditory_name,
         status=status_arg,
         comment=comment,
     )
 
     if success:
-        # Для ответа пользователю показываем русское название
         display_name = get_russian_name(db_auditory_name)
         status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status_arg, "")
+        
+        from config import config
+        if config.GROUP_CHAT_ID and config.TOPIC_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=config.GROUP_CHAT_ID,
+                    message_thread_id=config.TOPIC_ID,
+                    text=f"🔄 {full_name} обновил статус {display_name}: {status_emoji} {status_arg.upper()}"
+                         + (f"\n📝 Комментарий: {comment}" if comment else "")
+                )
+            except Exception as e:
+                logger.error("Не удалось отправить уведомление в топик: %s", e)
         
         keyboard = [
             [

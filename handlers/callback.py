@@ -39,16 +39,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if len(parts) >= 3:
             auditory_id = parts[1]
             status = parts[2]
-            # Зелёный статус — сразу сохраняем
             if status == "green":
                 await set_status_from_button(query, context, user_id, auditory_id, status, None)
             else:
-                # Жёлтый/красный — запрашиваем комментарий
                 context.user_data["waiting_for"] = {
                     "type": "status_comment",
                     "auditory_id": auditory_id,
                     "status": status,
-                    "query": query  # сохраняем query для возврата
+                    "query": query
                 }
                 await query.edit_message_text(
                     f"📝 Опишите проблему для статуса **{status.upper()}**:\n\n"
@@ -212,7 +210,6 @@ async def show_status_buttons(query, auditory_id, context):
     eng_name = row["name"]
     rus_name = get_russian_name(eng_name)
     
-    # Получаем последний статус
     last_status = await Database.get_latest_status(int(auditory_id))
     
     status_text = ""
@@ -270,19 +267,20 @@ async def set_status_from_button(query, context, user_id, auditory_id, status, c
         status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status, "")
         
         from config import config
-        if config.GROUP_CHAT_ID:
+        if config.GROUP_CHAT_ID and config.TOPIC_ID:
             try:
                 message = f"🔄 {full_name} обновил статус {rus_name}: {status_emoji} {status.upper()}"
                 if comment:
                     message += f"\n📝 Комментарий: {comment}"
+                
                 await context.bot.send_message(
-                    config.GROUP_CHAT_ID,
-                    message
+                    chat_id=config.GROUP_CHAT_ID,
+                    message_thread_id=config.TOPIC_ID,
+                    text=message
                 )
             except Exception as e:
-                logger.error("Не удалось отправить уведомление в группу: %s", e)
+                logger.error("Не удалось отправить уведомление в топик: %s", e)
         
-        # Возвращаемся к меню аудитории
         await show_status_buttons(query, auditory_id, context)
     else:
         await query.edit_message_text(
