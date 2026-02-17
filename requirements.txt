@@ -1,5 +1,5 @@
 # Telegram Bot
-python-telegram-bot>=20.0,<21.0
+python-telegram-bot>=22.2
 
 # PostgreSQL
 asyncpg>=0.31.0
