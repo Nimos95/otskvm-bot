@@ -30,21 +30,17 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     await Database.update_user_last_active(telegram_id)
 
-    # Создаём inline-кнопки
+    # Главное меню — только навигация, без статусов!
     keyboard = [
-        [
-            InlineKeyboardButton("🟢 Всё ок", callback_data="status_green"),
-            InlineKeyboardButton("🟡 Проблемы", callback_data="status_yellow"),
-            InlineKeyboardButton("🔴 Не работает", callback_data="status_red"),
-        ],
         [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
+        [InlineKeyboardButton("📅 Сегодняшние мероприятия", callback_data="today_menu")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
         f"Привет, {full_name}!\n\n"
-        "Я бот для управления аудиториями и статусами.\n\n"
-        "Выберите действие:",
+        "Я бот для учёта состояния аудиторий.\n"
+        "Выберите действие в меню ниже:",
         reply_markup=reply_markup
     )
