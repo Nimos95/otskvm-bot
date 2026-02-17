@@ -33,7 +33,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Главное меню — только навигация, без статусов!
     keyboard = [
         [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
-        [InlineKeyboardButton("📅 Сегодняшние мероприятия", callback_data="today_menu")],
+        [InlineKeyboardButton("📅 Расписание", callback_data="schedule_menu")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)

@@ -21,23 +21,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     await Database.update_user_last_active(user_id)
     
-    if data == "status_green":
-        await query.edit_message_text(
-            "🟢 Введите /status <аудитория> green\n\n"
-            "Например: /status 118 green"
-        )
-    elif data == "status_yellow":
-        await query.edit_message_text(
-            "🟡 Введите /status <аудитория> yellow [комментарий]\n\n"
-            "Например: /status G3.56 yellow Проектор моргает"
-        )
-    elif data == "status_red":
-        await query.edit_message_text(
-            "🔴 Введите /status <аудитория> red [комментарий]\n\n"
-            "Например: /status 335 red Нет звука"
-        )
-    elif data == "list_auditories":
+    if data == "list_auditories":
         await show_auditories(query)
+    elif data == "schedule_menu":
+        await show_schedule_menu(query)
+    elif data == "today_schedule":
+        await show_today_schedule(query)
+    elif data == "tomorrow_schedule":
+        await show_tomorrow_schedule(query)
+    elif data == "week_schedule":
+        await show_week_schedule(query)
     elif data.startswith("aud_"):
         auditory_id = data[4:]
         await show_status_buttons(query, auditory_id)
@@ -50,15 +43,118 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data == "back_to_main":
         await show_main_menu(query)
     elif data == "help":
-        await query.edit_message_text(
-            "Доступные команды:\n"
-            "/status — отметить статус аудитории\n"
-            "/today — мероприятия на сегодня\n"
-            "/start — приветствие\n\n"
-            "Используйте кнопки для быстрого выбора."
-        )
+        await show_help(query)
     else:
         await query.edit_message_text("Неизвестная команда")
+
+
+async def show_main_menu(query):
+    """Показывает главное меню."""
+    keyboard = [
+        [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
+        [InlineKeyboardButton("📅 Расписание", callback_data="schedule_menu")],
+        [InlineKeyboardButton("❓ Помощь", callback_data="help")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+
+
+async def show_help(query):
+    """Показывает справку."""
+    keyboard = [
+        [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
+        [InlineKeyboardButton("« Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📌 **Доступные команды:**\n"
+        "/start — главное меню\n"
+        "/status <аудитория> <статус> — быстро отметить статус\n\n"
+        "**Статусы:**\n"
+        "🟢 green — всё работает\n"
+        "🟡 yellow — есть проблемы\n"
+        "🔴 red — не работает\n\n"
+        "Используйте кнопки для навигации.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def show_schedule_menu(query):
+    """Показывает расписание мероприятий."""
+    keyboard = [
+        [InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule")],
+        [InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")],
+        [InlineKeyboardButton("📅 Эта неделя", callback_data="week_schedule")],
+        [InlineKeyboardButton("« Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📅 **Расписание мероприятий**\n\n"
+        "Выберите период:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def show_today_schedule(query):
+    """Показывает расписание на сегодня."""
+    # TODO: интеграция с Google Calendar
+    keyboard = [
+        [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📅 **Сегодня**\n\n"
+        "На сегодня мероприятий нет.\n\n"
+        "Функция появится после интеграции с Google Calendar.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def show_tomorrow_schedule(query):
+    """Показывает расписание на завтра."""
+    # TODO: интеграция с Google Calendar
+    keyboard = [
+        [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📆 **Завтра**\n\n"
+        "На завтра мероприятий нет.\n\n"
+        "Функция появится после интеграции с Google Calendar.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def show_week_schedule(query):
+    """Показывает расписание на неделю."""
+    # TODO: интеграция с Google Calendar
+    keyboard = [
+        [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📅 **Эта неделя**\n\n"
+        "На эту неделю мероприятий нет.\n\n"
+        "Функция появится после интеграции с Google Calendar.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
 
 
 async def show_auditories(query):
@@ -70,7 +166,7 @@ async def show_auditories(query):
         await query.edit_message_text("В базе нет аудиторий")
         return
     
-    # Создаём кнопки с русскими названиями
+    # Создаём кнопки для каждой аудитории (по 2 в ряд)
     keyboard = []
     row_buttons = []
     for i, row_data in enumerate(rows):
@@ -112,13 +208,15 @@ async def show_status_buttons(query, auditory_id):
         [
             InlineKeyboardButton("🔴 Не работает", callback_data=f"set_{auditory_id}_red"),
         ],
-        [InlineKeyboardButton("« Назад к списку", callback_data="list_auditories")]
+        [InlineKeyboardButton("« Назад к списку", callback_data="list_auditories")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        f"Аудитория: {rus_name}\nВыберите статус:",
-        reply_markup=reply_markup
+        f"Аудитория: **{rus_name}**\nВыберите статус:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
 
 
@@ -138,7 +236,7 @@ async def set_status_from_button(query, context, user_id, auditory_id, status):
     
     success = await Database.add_status(
         telegram_id=user_id,
-        auditory_name=eng_name,  # в БД сохраняем английское название
+        auditory_name=eng_name,
         status=status,
         comment=None
     )
@@ -146,6 +244,7 @@ async def set_status_from_button(query, context, user_id, auditory_id, status):
     if success:
         status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(status, "")
         
+        # Отправляем в группу, если настроено
         from config import config
         if config.GROUP_CHAT_ID:
             try:
@@ -156,37 +255,21 @@ async def set_status_from_button(query, context, user_id, auditory_id, status):
             except Exception as e:
                 logger.error("Не удалось отправить уведомление в группу: %s", e)
         
+        keyboard = [
+            [InlineKeyboardButton("📋 К списку аудиторий", callback_data="list_auditories")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
-            f"✅ Статус аудитории {rus_name}: {status_emoji} {status.upper()}\n\n"
-            "Что дальше?",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 К списку аудиторий", callback_data="list_auditories")],
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
-            ])
+            f"✅ Статус аудитории **{rus_name}**: {status_emoji} {status.upper()}",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
         )
     else:
         await query.edit_message_text(
-            f"❌ Не удалось добавить статус. Проверьте, что аудитория существует.",
+            "❌ Не удалось добавить статус",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("« Назад", callback_data="list_auditories")]
             ])
         )
-
-
-async def show_main_menu(query):
-    """Показывает главное меню."""
-    keyboard = [
-        [
-            InlineKeyboardButton("🟢 Всё ок", callback_data="status_green"),
-            InlineKeyboardButton("🟡 Проблемы", callback_data="status_yellow"),
-            InlineKeyboardButton("🔴 Не работает", callback_data="status_red"),
-        ],
-        [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
-        [InlineKeyboardButton("❓ Помощь", callback_data="help")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "Выберите действие:",
-        reply_markup=reply_markup
-    )
