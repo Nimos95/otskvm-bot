@@ -5,6 +5,10 @@ venv*/
 .env.local
 .env.production
 
+# Secrets
+credentials.json
+token.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -51,14 +55,3 @@ tmp/
 temp/
 *.tmp
 *.temp
-
-# Утилиты
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.mypy_cache/
-.ruff_cache/
-
-# Проект-специфичные
-# (добавь сюда свои папки, если нужно)

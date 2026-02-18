@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 
+
 class Config:
     """Конфигурация приложения из переменных окружения."""
 
@@ -18,6 +19,7 @@ class Config:
     GROUP_CHAT_ID: Optional[int]
     TOPIC_ID: Optional[int]
     LOG_LEVEL: str
+    GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
     def __init__(self) -> None:
         self.BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()

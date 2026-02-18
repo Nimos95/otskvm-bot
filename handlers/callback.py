@@ -1,12 +1,15 @@
 """Обработчик inline-кнопок."""
 
 import logging
+import cyrtranslit
+from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import Database, get_db_pool
 from utils.auditory_names import get_russian_name
+from handlers.today import get_events_for_date
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +29,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data == "schedule_menu":
         await show_schedule_menu(query)
     elif data == "today_schedule":
-        await show_today_schedule(query)
+        await show_today_schedule_calendar(query)
     elif data == "tomorrow_schedule":
-        await show_tomorrow_schedule(query)
+        await show_tomorrow_schedule_calendar(query)
     elif data == "week_schedule":
-        await show_week_schedule(query)
+        await show_week_schedule_calendar(query)
     elif data.startswith("aud_"):
         auditory_id = data[4:]
         await show_status_buttons(query, auditory_id, context)
@@ -99,11 +102,11 @@ async def show_help(query):
 
 
 async def show_schedule_menu(query):
-    """Показывает расписание мероприятий."""
+    """Показывает меню расписания."""
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule")],
         [InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")],
-        [InlineKeyboardButton("📅 Эта неделя", callback_data="week_schedule")],
+        [InlineKeyboardButton("📅 Неделя", callback_data="week_schedule")],
         [InlineKeyboardButton("« Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -116,52 +119,174 @@ async def show_schedule_menu(query):
     )
 
 
-async def show_today_schedule(query):
+async def show_today_schedule_calendar(query):
     """Показывает расписание на сегодня."""
+    from handlers.today import get_events_for_date
+    
+    today = datetime.now().date()
+    events = await get_events_for_date(today)
+    
+    if not events:
+        keyboard = [
+            [InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")],
+            [InlineKeyboardButton("« Назад", callback_data="schedule_menu")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📅 **Сегодня ({today.strftime('%d.%m.%Y')})**\n\n"
+            f"На сегодня мероприятий нет.",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+        return
+    
+    message = f"📅 **Мероприятия на сегодня ({today.strftime('%d.%m.%Y')})**\n\n"
+    
+    for event in events:
+        time_str = event["start_time"].strftime("%H:%M")
+        en_title = event["title"]
+        # Конвертируем обратно в русский для отображения
+        ru_title = cyrtranslit.to_cyrillic(en_title)
+        
+        if event.get("auditory_name"):
+            rus_name = get_russian_name(event["auditory_name"])
+            message += f"• **{time_str}** — {ru_title} (ауд. {rus_name})\n"
+        else:
+            message += f"• **{time_str}** — {ru_title}\n"
+    
     keyboard = [
+        [
+            InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule"),
+            InlineKeyboardButton("📅 Неделя", callback_data="week_schedule")
+        ],
         [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "📅 **Сегодня**\n\n"
-        "На сегодня мероприятий нет.\n\n"
-        "Функция появится после интеграции с Google Calendar.",
+        message,
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
 
-async def show_tomorrow_schedule(query):
+async def show_tomorrow_schedule_calendar(query):
     """Показывает расписание на завтра."""
+    from handlers.today import get_events_for_date
+    
+    tomorrow = datetime.now().date() + timedelta(days=1)
+    events = await get_events_for_date(tomorrow)
+    
+    if not events:
+        keyboard = [
+            [InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule")],
+            [InlineKeyboardButton("📅 Неделя", callback_data="week_schedule")],
+            [InlineKeyboardButton("« Назад", callback_data="schedule_menu")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📆 **Завтра ({tomorrow.strftime('%d.%m.%Y')})**\n\n"
+            f"На завтра мероприятий нет.",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+        return
+    
+    message = f"📆 **Мероприятия на завтра ({tomorrow.strftime('%d.%m.%Y')})**\n\n"
+    
+    for event in events:
+        time_str = event["start_time"].strftime("%H:%M")
+        en_title = event["title"]
+        ru_title = cyrtranslit.to_cyrillic(en_title)
+        
+        if event.get("auditory_name"):
+            rus_name = get_russian_name(event["auditory_name"])
+            message += f"• **{time_str}** — {ru_title} (ауд. {rus_name})\n"
+        else:
+            message += f"• **{time_str}** — {ru_title}\n"
+    
     keyboard = [
+        [
+            InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule"),
+            InlineKeyboardButton("📅 Неделя", callback_data="week_schedule")
+        ],
         [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "📆 **Завтра**\n\n"
-        "На завтра мероприятий нет.\n\n"
-        "Функция появится после интеграции с Google Calendar.",
+        message,
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
 
-async def show_week_schedule(query):
+async def show_week_schedule_calendar(query):
     """Показывает расписание на неделю."""
+    from handlers.today import get_events_for_date
+    
+    today = datetime.now().date()
+    events_by_day = {}
+    
+    for i in range(7):
+        date = today + timedelta(days=i)
+        events = await get_events_for_date(date)
+        if events:
+            events_by_day[date] = events
+    
+    if not events_by_day:
+        keyboard = [
+            [InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule")],
+            [InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")],
+            [InlineKeyboardButton("« Назад", callback_data="schedule_menu")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📅 **Неделя ({today.strftime('%d.%m')} - {(today+timedelta(days=6)).strftime('%d.%m.%Y')})**\n\n"
+            f"На эту неделю мероприятий нет.",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+        return
+    
+    message = f"📅 **Мероприятия на неделю ({today.strftime('%d.%m')} - {(today+timedelta(days=6)).strftime('%d.%m.%Y')})**\n\n"
+    
+    for date in sorted(events_by_day.keys()):
+        day_str = date.strftime("%a, %d.%m")
+        message += f"**{day_str}:**\n"
+        
+        for event in events_by_day[date]:
+            time_str = event["start_time"].strftime("%H:%M")
+            en_title = event["title"]
+            ru_title = cyrtranslit.to_cyrillic(en_title)
+            
+            if event.get("auditory_name"):
+                rus_name = get_russian_name(event["auditory_name"])
+                message += f"  • {time_str} — {ru_title} (ауд. {rus_name})\n"
+            else:
+                message += f"  • {time_str} — {ru_title}\n"
+        message += "\n"
+    
     keyboard = [
+        [
+            InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule"),
+            InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")
+        ],
         [InlineKeyboardButton("« К выбору периода", callback_data="schedule_menu")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "📅 **Эта неделя**\n\n"
-        "На эту неделю мероприятий нет.\n\n"
-        "Функция появится после интеграции с Google Calendar.",
+        message,
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
