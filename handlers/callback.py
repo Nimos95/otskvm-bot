@@ -44,7 +44,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await show_week_schedule_calendar(query)
     elif data.startswith("aud_"):
         auditory_id = data[4:]
-        await show_status_buttons(query, auditory_id, context)
+        try:
+            await show_status_buttons(query, auditory_id, context)
+        except Exception as e:
+            if "Message is not modified" in str(e) or "Bad Request" in str(e):
+                await query.answer("✅ Статус уже актуален")
+            else:
+                logger.error(f"Ошибка: {e}")
+                await query.answer("❌ Ошибка")
     elif data.startswith("set_"):
         parts = data.split("_")
         if len(parts) >= 3:
@@ -407,18 +414,30 @@ async def show_status_buttons(query, auditory_id, context):
         [
             InlineKeyboardButton("🔴 Не работает", callback_data=f"set_{auditory_id}_red"),
         ],
-        [InlineKeyboardButton("🔄 Обновить статус", callback_data=f"aud_{auditory_id}")],
         [InlineKeyboardButton("« Назад к списку", callback_data="list_auditories")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        f"Аудитория: **{rus_name}**{status_text}\n\n"
-        f"Выберите новый статус:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
+    # Формируем новый текст
+    new_text = f"Аудитория: **{rus_name}**{status_text}\n\nВыберите новый статус:"
+    
+    try:
+        # Пробуем обновить сообщение
+        await query.edit_message_text(
+            new_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        # Если ошибка из-за того, что сообщение не изменилось
+        if "Message is not modified" in str(e) or "Bad Request" in str(e):
+            # Просто отвечаем на callback, чтобы убрать "часики"
+            await query.answer("✅ Статус уже актуален")
+        else:
+            # Другие ошибки логируем
+            logger.error(f"Ошибка при обновлении сообщения: {e}")
+            await query.answer("❌ Произошла ошибка")
 
 
 async def set_status_from_button(query, context, user_id, auditory_id, status, comment):
