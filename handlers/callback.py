@@ -14,6 +14,11 @@ from utils.auditory_names import get_russian_name
 from handlers.today import get_events_for_date
 from handlers import start  
 
+from handlers.assign import (
+    show_engineers_for_event, assign_engineer_to_event,
+    accept_assignment, decline_assignment
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,13 +65,55 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     parse_mode="Markdown"
                 )
     elif data == "back_to_main":
-        await show_main_menu(query)
+        await show_persistent_menu(query)  # ← используем show_persistent_menu, а не show_main_menu
     elif data == "help":
         await show_help(query)
     elif data == "first_start":
         await start.first_start_handler(update, context)
-    elif data == "back_to_main":
-        await show_persistent_menu(query)
+    elif data == "assign_list":
+    # Возврат к списку мероприятий
+        from handlers.assign import assign_handler
+    
+    # Создаём фейковый update с командой /assign
+        class FakeMessage:
+            def __init__(self, chat, from_user):
+                self.chat = chat
+                self.chat_id = chat.id
+                self.from_user = from_user
+                self.text = "/assign"
+                self.reply_text = query.message.reply_text
+    
+        class FakeUpdate:
+            def __init__(self, message):
+                self.message = message
+                self.effective_user = message.from_user
+                self.effective_chat = message.chat
+    
+        fake_message = FakeMessage(query.message.chat, query.from_user)
+        fake_update = FakeUpdate(fake_message)
+    
+    # Не удаляем сообщение, а редактируем
+        await query.edit_message_text("⏳ Загружаем список мероприятий...")
+        await assign_handler(fake_update, context)
+    
+
+    elif data.startswith("assign_event_"):
+        event_id = data.split("_")[2]
+        await show_engineers_for_event(query, event_id)
+    elif data.startswith("assign_to_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            event_id = parts[2]
+            engineer_id = parts[3]
+            await assign_engineer_to_event(query, context, user_id, event_id, engineer_id)
+    elif data.startswith("accept_"):
+        event_id = data.split("_")[1]
+        await accept_assignment(query, user_id, event_id)
+    elif data.startswith("decline_"):
+        event_id = data.split("_")[1]
+        await decline_assignment(query, user_id, event_id)
+    elif data == "assign_multi":
+        await query.answer("Функция в разработке")
     else:
         await query.edit_message_text("Неизвестная команда")
 

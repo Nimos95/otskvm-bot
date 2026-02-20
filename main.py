@@ -16,6 +16,7 @@ from handlers.callback import callback_handler
 from handlers.message import message_handler
 from handlers.menu import menu_button_handler
 from services.sync_scheduler import sync_loop
+from handlers.assign import assign_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -57,15 +58,16 @@ async def main() -> None:
     application.add_handler(CommandHandler("cancel", start.cancel_handler))
     application.add_handler(CommandHandler("status", status.status_handler))
     application.add_handler(CommandHandler("today", today.today_handler))
+    application.add_handler(CommandHandler("assign", assign_handler))
     
     # 2. Inline-кнопки
     application.add_handler(CallbackQueryHandler(callback_handler))
     
     # 3. Постоянное меню (текстовые кнопки) - ДО общего обработчика!
     application.add_handler(MessageHandler(
-        filters.Text(["📋 Аудитории", "📅 Расписание", "❓ Помощь"]), 
+        filters.Text(["📋 Аудитории", "📅 Расписание", "👥 Назначения", "❓ Помощь"]), 
         menu_button_handler
-    ))
+        ))
     
     # 4. Общий обработчик текстовых сообщений (для комментариев)
     #    ВСЕ текстовые сообщения, которые НЕ являются командами и НЕ попали в пункт 3

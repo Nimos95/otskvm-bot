@@ -12,17 +12,13 @@ from handlers.help import show_help
 logger = logging.getLogger(__name__)
 
 
+
 def get_main_menu_keyboard():
-    """
-    Возвращает постоянную клавиатуру главного меню.
-    
-    Returns:
-        ReplyKeyboardMarkup: клавиатура, которая всегда висит над полем ввода
-    """
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton("📋 Аудитории")],
-            [KeyboardButton("📅 Расписание"), KeyboardButton("❓ Помощь")]
+            [KeyboardButton("📅 Расписание"), KeyboardButton("👥 Назначения")],  # ← добавили
+            [KeyboardButton("❓ Помощь")]
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -105,6 +101,11 @@ async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     elif text == "📅 Расписание":
         await show_schedule_menu(update.message)
+
+    elif text == "👥 Назначения":
+        from handlers.assign import assign_handler
+    # Создаём фейковый update с командой /assign
+        await assign_handler(update, context)
         
     elif text == "❓ Помощь":
         await show_help(update.message)
