@@ -1,11 +1,12 @@
-"""Обработчик команды /start."""
+"""Обработчик команды /start и первого запуска."""
 
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from database import Database
+from database import Database, get_db_pool  # ← добавили get_db_pool!
+from handlers.menu import show_persistent_menu
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +14,9 @@ logger = logging.getLogger(__name__)
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /start.
-
-    Регистрирует пользователя в БД и отправляет приветственное сообщение с кнопками.
+    
+    Если пользователь новый — показываем кнопку запуска.
+    Если уже зарегистрирован — сразу постоянное меню.
     """
     if not update.effective_user or not update.message:
         return
@@ -24,25 +26,50 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     full_name = user.full_name or user.first_name or "Пользователь"
     username = user.username
 
+    # Регистрируем пользователя в БД
     success = await Database.add_user(telegram_id=telegram_id, full_name=full_name, username=username)
     if not success:
         logger.warning("Не удалось добавить пользователя %s", telegram_id)
     
     await Database.update_user_last_active(telegram_id)
 
-    keyboard = [
-        [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
-        [InlineKeyboardButton("📅 Расписание", callback_data="schedule_menu")],
-        [InlineKeyboardButton("❓ Помощь", callback_data="help")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        f"Привет, {full_name}!\n\n"
-        "Я бот для учёта состояния аудиторий.\n"
-        "Выберите действие в меню ниже:",
-        reply_markup=reply_markup
+    # Проверяем, новый это пользователь (по наличию статусов)
+    pool = get_db_pool()  # ← исправлено!
+    row = await pool.fetchrow(
+        "SELECT COUNT(*) FROM status_log WHERE reported_by = $1",
+        telegram_id
     )
+    is_new = row["count"] == 0 if row else True
+    
+    if is_new:
+        # Показываем приветствие с кнопкой запуска
+        keyboard = [
+            [InlineKeyboardButton("🚀 Запустить бота", callback_data="first_start")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"👋 Привет, {full_name}!\n\n"
+            "Я бот для учёта состояния аудиторий.\n"
+            "Нажмите кнопку ниже, чтобы начать работу:",
+            reply_markup=reply_markup
+        )
+    else:
+        # Сразу показываем постоянное меню
+        await show_persistent_menu(update)
+
+
+async def first_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик кнопки 'Запустить бота'.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    logger.info(f"Пользователь {query.from_user.id} нажал кнопку запуска")
+    
+    # Показываем постоянное меню
+    await show_persistent_menu(query)
 
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

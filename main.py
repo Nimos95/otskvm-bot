@@ -3,14 +3,19 @@
 import asyncio
 import logging
 
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, 
+    MessageHandler, filters, ChatMemberHandler, ContextTypes
+)
 
 from config import config
 from database import close_db_pool, init_db_pool
 from handlers import start, status, today
 from handlers.callback import callback_handler
 from handlers.message import message_handler
-from services.sync_scheduler import sync_loop  # ← импортируем синхронизацию
+from handlers.menu import menu_button_handler
+from services.sync_scheduler import sync_loop
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -19,10 +24,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def new_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Приветствие при добавлении бота в группу/топик.
+    """
+    if update.my_chat_member.new_chat_member.status == "member":
+        from handlers.menu import show_persistent_menu
+        await show_persistent_menu(update)
+
+
 async def main() -> None:
     """
-    Главная асинхронная функция: инициализирует БД, создаёт приложение,
-    регистрирует обработчики и запускает бота. Обеспечивает graceful shutdown.
+    Главная асинхронная функция.
     """
     # Инициализация пула БД
     try:
@@ -35,21 +48,38 @@ async def main() -> None:
     # Создание приложения бота
     application = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Регистрация обработчиков команд
+    # ============================================
+    # РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ (ВАЖЕН ПОРЯДОК!)
+    # ============================================
+
+    # 1. Команды (самый высокий приоритет)
     application.add_handler(CommandHandler("start", start.start_handler))
     application.add_handler(CommandHandler("cancel", start.cancel_handler))
     application.add_handler(CommandHandler("status", status.status_handler))
     application.add_handler(CommandHandler("today", today.today_handler))
     
-    # Регистрация обработчика inline-кнопок
+    # 2. Inline-кнопки
     application.add_handler(CallbackQueryHandler(callback_handler))
     
-    # Регистрация обработчика текстовых сообщений (для комментариев)
+    # 3. Постоянное меню (текстовые кнопки) - ДО общего обработчика!
+    application.add_handler(MessageHandler(
+        filters.Text(["📋 Аудитории", "📅 Расписание", "❓ Помощь"]), 
+        menu_button_handler
+    ))
+    
+    # 4. Общий обработчик текстовых сообщений (для комментариев)
+    #    ВСЕ текстовые сообщения, которые НЕ являются командами и НЕ попали в пункт 3
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    # 5. Обработчик новых участников (для группы)
+    application.add_handler(ChatMemberHandler(
+        new_chat_member_handler, 
+        ChatMemberHandler.MY_CHAT_MEMBER
+    ))
 
-    # Запуск фоновой задачи синхронизации календаря
+    # Запуск фоновой синхронизации календаря
     asyncio.create_task(sync_loop())
-    logger.info("Фоновая синхронизация календаря запущена")  # ← теперь это появится в логах
+    logger.info("Фоновая синхронизация календаря запущена")
 
     try:
         logger.info("Бот запущен")
@@ -57,7 +87,6 @@ async def main() -> None:
         await application.start()
         await application.updater.start_polling()
         
-        # Держим бота запущенным
         while True:
             await asyncio.sleep(3600)
             
@@ -66,19 +95,15 @@ async def main() -> None:
     except Exception as e:
         logger.critical("Ошибка при запуске бота: %s", e, exc_info=True)
     finally:
-        # Корректная остановка бота
         if application.updater.running:
             await application.updater.stop()
         await application.stop()
         await application.shutdown()
-        
-        # Закрываем пул БД
         await close_db_pool()
         logger.info("Бот остановлен")
 
 
 if __name__ == "__main__":
-    # Создаём и устанавливаем event loop вручную
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:

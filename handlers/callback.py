@@ -4,12 +4,15 @@ import logging
 import cyrtranslit
 from datetime import datetime, timedelta
 
+from handlers.menu import show_persistent_menu
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import Database, get_db_pool
 from utils.auditory_names import get_russian_name
 from handlers.today import get_events_for_date
+from handlers import start  
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await show_main_menu(query)
     elif data == "help":
         await show_help(query)
+    elif data == "first_start":
+        await start.first_start_handler(update, context)
+    elif data == "back_to_main":
+        await show_persistent_menu(query)
     else:
         await query.edit_message_text("Неизвестная команда")
 
