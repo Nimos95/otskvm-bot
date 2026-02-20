@@ -20,6 +20,8 @@ class Config:
     TOPIC_ID: Optional[int]
     LOG_LEVEL: str
     GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+    
+    ASSIGN_DAYS_RANGE = 7  # показывать мероприятия на неделю вперёд
 
     def __init__(self) -> None:
         self.BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
