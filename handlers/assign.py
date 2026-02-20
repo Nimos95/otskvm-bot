@@ -9,6 +9,8 @@ from telegram.ext import ContextTypes
 from database import get_db_pool
 from utils.auditory_names import get_russian_name
 
+from config import config
+
 import cyrtranslit
 
 logger = logging.getLogger(__name__)
@@ -25,14 +27,21 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} вызвал /assign")
     
-    # Получаем мероприятия на ближайшие дни (сегодня, завтра, послезавтра)
+    # Получаем мероприятия на ближайшие 5 дней
     pool = get_db_pool()
     today = datetime.now().date()
-    tomorrow = today + timedelta(days=1)
-    day_after = tomorrow + timedelta(days=1)
+    
+    # Создаем список дат на количество дней из конфига
+    days_range = getattr(config, 'ASSIGN_DAYS_RANGE', 5)
+    dates = [today + timedelta(days=i) for i in range(days_range)]
+    
+    logger.info(f"Ищем мероприятия на даты: {dates}")
+    
+    # Формируем запрос с динамическим количеством параметров
+    placeholders = ','.join([f'${i+1}' for i in range(len(dates))])
     
     rows = await pool.fetch(
-        """
+        f"""
         SELECT 
             ce.id,
             ce.title,
@@ -42,18 +51,18 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             a.building
         FROM calendar_events ce
         LEFT JOIN auditories a ON ce.auditory_id = a.id
-        WHERE DATE(ce.start_time) IN ($1, $2, $3)
+        WHERE DATE(ce.start_time) IN ({placeholders})
           AND ce.status = 'confirmed'
         ORDER BY ce.start_time
         """,
-        today,
-        tomorrow,
-        day_after
+        *dates
     )
+    
+    logger.info(f"Найдено мероприятий: {len(rows)}")
     
     if not rows:
         await update.message.reply_text(
-            "📅 На ближайшие дни нет мероприятий для назначения."
+            "📅 На ближайшие 5 дней нет мероприятий для назначения."
         )
         return
     
@@ -63,7 +72,8 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     for event in rows:
         event_id = event["id"]
-        date_str = event["start_time"].strftime("%d.%m %H:%M")
+        # Форматируем дату с днём недели для ясности
+        date_str = event["start_time"].strftime("%a, %d.%m %H:%M")
         title = event["title"]
         
         # Обратная транслитерация названия мероприятия
