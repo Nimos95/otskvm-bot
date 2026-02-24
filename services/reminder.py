@@ -332,9 +332,10 @@ async def send_afternoon_report(bot):
         """
         SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as completed,
-            SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) as confirmed,
-            SUM(CASE WHEN status = 'assigned' THEN 1 ELSE 0 END) as pending
+            SUM(CASE WHEN ea.status = 'done' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN ea.status = 'accepted' THEN 1 ELSE 0 END) as confirmed,
+            SUM(CASE WHEN ea.status = 'assigned' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN ea.status = 'replacing' THEN 1 ELSE 0 END) as replacing
         FROM event_assignments ea
         JOIN calendar_events ce ON ea.event_id = ce.id
         WHERE DATE(ce.start_time) = CURRENT_DATE
