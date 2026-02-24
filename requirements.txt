@@ -1,17 +1,20 @@
-# Telegram Bot
-python-telegram-bot>=22.2
+# asyncpg — асинхронный драйвер PostgreSQL
+asyncpg==0.31.0
 
-# PostgreSQL
-asyncpg>=0.31.0
+# cyrtranslit — транслитерация кириллицы в латиницу
+cyrtranslit==1.1.1
 
-# Environment
-python-dotenv>=1.2.1
+# google-api-python-client — клиент для Google APIs (в т.ч. Calendar)
+google-api-python-client==2.169.0
 
-# Logging
-loguru>=0.7.3
+# google-auth — базовая аутентификация Google (Credentials, Request)
+google-auth==2.48.0
 
-google-api-python-client==2.150.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.1
+# google-auth-oauthlib — OAuth 2.0 flow для Google
+google-auth-oauthlib==1.2.0
 
-cyrtranslit==1.2.0
+# python-dotenv — загрузка конфигурации из .env
+python-dotenv==1.2.0
+
+# python-telegram-bot — Telegram Bot API (v22, async)
+python-telegram-bot==22.6
