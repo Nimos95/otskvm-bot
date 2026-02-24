@@ -5,6 +5,7 @@ import cyrtranslit
 from datetime import datetime, timedelta
 
 from handlers.menu import show_persistent_menu
+from services.reminder import log_notification
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -16,7 +17,7 @@ from handlers import start
 
 from handlers.assign import (
     show_engineers_for_event, assign_engineer_to_event,
-    accept_assignment, decline_assignment
+    accept_assignment, decline_assignment, show_assign_list
 )
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await show_week_schedule_calendar(query)
     elif data.startswith("aud_"):
         auditory_id = data[4:]
-        try:
-            await show_status_buttons(query, auditory_id, context)
-        except Exception as e:
-            if "Message is not modified" in str(e) or "Bad Request" in str(e):
-                await query.answer("✅ Статус уже актуален")
-            else:
-                logger.error(f"Ошибка: {e}")
-                await query.answer("❌ Ошибка")
+        await show_status_buttons(query, auditory_id, context)
     elif data.startswith("set_"):
         parts = data.split("_")
         if len(parts) >= 3:
@@ -72,38 +66,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     parse_mode="Markdown"
                 )
     elif data == "back_to_main":
-        await show_persistent_menu(query)  # ← используем show_persistent_menu, а не show_main_menu
+        await show_persistent_menu(query)
     elif data == "help":
         await show_help(query)
     elif data == "first_start":
         await start.first_start_handler(update, context)
     elif data == "assign_list":
-    # Возврат к списку мероприятий
-        from handlers.assign import assign_handler
-    
-    # Создаём фейковый update с командой /assign
-        class FakeMessage:
-            def __init__(self, chat, from_user):
-                self.chat = chat
-                self.chat_id = chat.id
-                self.from_user = from_user
-                self.text = "/assign"
-                self.reply_text = query.message.reply_text
-    
-        class FakeUpdate:
-            def __init__(self, message):
-                self.message = message
-                self.effective_user = message.from_user
-                self.effective_chat = message.chat
-    
-        fake_message = FakeMessage(query.message.chat, query.from_user)
-        fake_update = FakeUpdate(fake_message)
-    
-    # Не удаляем сообщение, а редактируем
-        await query.edit_message_text("⏳ Загружаем список мероприятий...")
-        await assign_handler(fake_update, context)
-    
-
+        await show_assign_list(query, context)
     elif data.startswith("assign_event_"):
         event_id = data.split("_")[2]
         await show_engineers_for_event(query, event_id)
@@ -113,6 +82,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             event_id = parts[2]
             engineer_id = parts[3]
             await assign_engineer_to_event(query, context, user_id, event_id, engineer_id)
+    elif data.startswith("confirm_"):
+        event_id = int(data.split("_")[1])
+        await confirm_assignment(query, user_id, event_id, context)
+    elif data.startswith("replace_"):
+        event_id = int(data.split("_")[1])
+        await request_replacement(query, user_id, event_id, context)
     elif data.startswith("accept_"):
         event_id = data.split("_")[1]
         await accept_assignment(query, user_id, event_id)
@@ -123,6 +98,158 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer("Функция в разработке")
     else:
         await query.edit_message_text("Неизвестная команда")
+
+
+async def confirm_assignment(query, user_id, event_id, context):
+    """Подтверждение участия в мероприятии."""
+    pool = get_db_pool()
+    
+    try:
+        # Обновляем статус
+        result = await pool.execute(
+            """
+            UPDATE event_assignments 
+            SET status = 'accepted', confirmed_at = NOW()
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        # Логируем
+        await log_notification(event_id, user_id, 'confirmation')
+        
+        # Получаем информацию о мероприятии для уведомления менеджера
+        event_info = await pool.fetchrow(
+            """
+            SELECT 
+                ce.title,
+                ce.start_time,
+                u.full_name as engineer_name
+            FROM calendar_events ce
+            LEFT JOIN users u ON u.telegram_id = $2
+            WHERE ce.id = $1
+            """,
+            event_id,
+            user_id
+        )
+        
+        await query.answer("✅ Участие подтверждено!")
+        await query.edit_message_text(
+            "✅ Вы подтвердили участие в мероприятии. Спасибо!"
+        )
+        
+        # Уведомляем менеджера
+        if event_info:
+            await notify_manager_about_confirmation(event_info, user_id, context)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении: {e}")
+        await query.answer("❌ Произошла ошибка")
+        await query.edit_message_text("❌ Не удалось подтвердить участие.")
+
+
+async def request_replacement(query, user_id, event_id, context):
+    """Запрос замены на мероприятие."""
+    pool = get_db_pool()
+    
+    try:
+        # Меняем статус на 'replacement_requested'
+        result = await pool.execute(
+            """
+            UPDATE event_assignments 
+            SET status = 'replacement_requested'
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        # Получаем информацию для уведомления
+        event_info = await pool.fetchrow(
+            """
+            SELECT 
+                ce.title,
+                ce.start_time,
+                u.full_name as engineer_name
+            FROM calendar_events ce
+            LEFT JOIN users u ON u.telegram_id = $2
+            WHERE ce.id = $1
+            """,
+            event_id,
+            user_id
+        )
+        
+        await query.answer("🔄 Запрос на замену отправлен")
+        await query.edit_message_text(
+            "🔄 Запрос на замену отправлен руководству.\n"
+            "Ожидайте, с вами свяжутся."
+        )
+        
+        # Уведомляем менеджера о необходимости замены
+        if event_info:
+            await notify_manager_about_replacement(event_info, user_id, context)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при запросе замены: {e}")
+        await query.answer("❌ Произошла ошибка")
+
+
+async def notify_manager_about_confirmation(event_info, user_id, context):
+    """Уведомляет менеджера о подтверждении инженера."""
+    from config import config
+    
+    if not config.GROUP_CHAT_ID:
+        return
+    
+    title = event_info['title']
+    time_str = event_info['start_time'].strftime("%d.%m %H:%M")
+    engineer_name = event_info['engineer_name']
+    
+    await context.bot.send_message(
+        chat_id=config.GROUP_CHAT_ID,
+        message_thread_id=config.TOPIC_ID,
+        text=(
+            f"✅ **Подтверждение получено**\n\n"
+            f"👤 **Инженер:** {engineer_name}\n"
+            f"📅 **Мероприятие:** {title}\n"
+            f"🕐 **Время:** {time_str}\n\n"
+            f"Статус подтверждён."
+        ),
+        parse_mode="Markdown"
+    )
+
+
+async def notify_manager_about_replacement(event_info, user_id, context):
+    """Уведомляет менеджера о запросе замены."""
+    from config import config
+    
+    if not config.GROUP_CHAT_ID:
+        return
+    
+    title = event_info['title']
+    time_str = event_info['start_time'].strftime("%d.%m %H:%M")
+    engineer_name = event_info['engineer_name']
+    
+    # Создаём клавиатуру для быстрого поиска замены
+    keyboard = [
+        [InlineKeyboardButton("👥 Назначить замену", callback_data="assign_list")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await context.bot.send_message(
+        chat_id=config.GROUP_CHAT_ID,
+        message_thread_id=config.TOPIC_ID,
+        text=(
+            f"🔄 **Запрос на замену!**\n\n"
+            f"👤 **Инженер:** {engineer_name}\n"
+            f"📅 **Мероприятие:** {title}\n"
+            f"🕐 **Время:** {time_str}\n\n"
+            f"Требуется срочно найти замену!"
+        ),
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
 
 
 async def show_main_menu(query):
@@ -208,7 +335,6 @@ async def show_today_schedule_calendar(query):
     for event in events:
         time_str = event["start_time"].strftime("%H:%M")
         en_title = event["title"]
-        # Конвертируем обратно в русский для отображения
         ru_title = cyrtranslit.to_cyrillic(en_title)
         
         if event.get("auditory_name"):
@@ -419,25 +545,19 @@ async def show_status_buttons(query, auditory_id, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Формируем новый текст
     new_text = f"Аудитория: **{rus_name}**{status_text}\n\nВыберите новый статус:"
     
     try:
-        # Пробуем обновить сообщение
         await query.edit_message_text(
             new_text,
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
     except Exception as e:
-        # Если ошибка из-за того, что сообщение не изменилось
-        if "Message is not modified" in str(e) or "Bad Request" in str(e):
-            # Просто отвечаем на callback, чтобы убрать "часики"
+        if "Message is not modified" in str(e):
             await query.answer("✅ Статус уже актуален")
         else:
-            # Другие ошибки логируем
-            logger.error(f"Ошибка при обновлении сообщения: {e}")
-            await query.answer("❌ Произошла ошибка")
+            logger.error(f"Ошибка при обновлении: {e}")
 
 
 async def set_status_from_button(query, context, user_id, auditory_id, status, comment):

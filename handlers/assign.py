@@ -147,7 +147,7 @@ async def show_engineers_for_event(query, event_id):
             ea.role as assigned_role
         FROM users u
         LEFT JOIN event_assignments ea ON u.telegram_id = ea.assigned_to AND ea.event_id = $1
-        WHERE u.role IN ('engineer', 'admin', 'manager')
+        WHERE u.role IN ('superadmin', 'engineer', 'admin', 'manager')
         ORDER BY 
             CASE WHEN ea.id IS NOT NULL THEN 0 ELSE 1 END,
             u.full_name
@@ -322,14 +322,41 @@ async def show_assign_list(query, context):
     """
     Показывает список мероприятий для назначения (возврат из callback).
     """
+    from handlers.assign import assign_handler
+    
+    # Получаем информацию о пользователе
+    user_id = query.from_user.id
+    full_name = query.from_user.full_name or "Пользователь"
+    
     # Удаляем текущее сообщение
     await query.message.delete()
     
-    # Отправляем команду от имени пользователя
-    await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text="/assign"
+    # Создаём фейковый update для assign_handler
+    class FakeMessage:
+        def __init__(self, chat, from_user, bot):
+            self.chat = chat
+            self.chat_id = chat.id
+            self.from_user = from_user
+            self.bot = bot
+            self.text = "/assign"
+            self.reply_text = lambda *args, **kwargs: None  # заглушка
+    
+    class FakeUpdate:
+        def __init__(self, message):
+            self.message = message
+            self.effective_user = message.from_user
+            self.effective_chat = message.chat
+            self.callback_query = None
+    
+    fake_message = FakeMessage(
+        query.message.chat,
+        query.from_user,
+        context.bot
     )
+    fake_update = FakeUpdate(fake_message)
+    
+    # Вызываем обработчик напрямую
+    await assign_handler(fake_update, context)
 
 
 async def decline_assignment(query, user_id, event_id):

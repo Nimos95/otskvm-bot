@@ -15,8 +15,9 @@ from handlers import start, status, today
 from handlers.callback import callback_handler
 from handlers.message import message_handler
 from handlers.menu import menu_button_handler
-from services.sync_scheduler import sync_loop
 from handlers.assign import assign_handler
+from services.sync_scheduler import sync_loop
+from services.reminder import find_upcoming_events, send_reminder
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -32,6 +33,61 @@ async def new_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_
     if update.my_chat_member.new_chat_member.status == "member":
         from handlers.menu import show_persistent_menu
         await show_persistent_menu(update)
+
+
+async def reminder_loop(application: Application):
+    """
+    Бесконечный цикл проверки приближающихся событий.
+    Запускается каждые 5 минут.
+    
+    Args:
+        application: экземпляр приложения для доступа к bot
+    """
+    while True:
+        try:
+            logger.info("Проверка событий для напоминаний")
+            events = await find_upcoming_events(minutes_before=35)
+            
+            if events:
+                logger.info(f"Найдено {len(events)} событий для напоминаний")
+            
+            for event in events:
+                if event.get('telegram_id'):  # если есть ответственный
+                    await send_reminder(event, application.bot)
+                    # Небольшая пауза между сообщениями
+                    await asyncio.sleep(1)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в цикле напоминаний: {e}", exc_info=True)
+        
+        # Проверяем каждые 5 минут
+        await asyncio.sleep(300)
+
+
+async def morning_summary_loop(application: Application):
+    """
+    Цикл для утренней сводки.
+    Запускается в 9:00 каждый день.
+    """
+    while True:
+        try:
+            now = datetime.now()
+            # Вычисляем время до следующего 9:00
+            next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if now >= next_run:
+                next_run += timedelta(days=1)
+            
+            wait_seconds = (next_run - now).total_seconds()
+            logger.info(f"Утренняя сводка запланирована через {wait_seconds/3600:.1f} часов")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Отправляем сводку
+            from services.reminder import send_morning_summary
+            await send_morning_summary(application.bot)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в цикле утренней сводки: {e}", exc_info=True)
 
 
 async def main() -> None:
@@ -67,10 +123,9 @@ async def main() -> None:
     application.add_handler(MessageHandler(
         filters.Text(["📋 Аудитории", "📅 Расписание", "👥 Назначения", "❓ Помощь"]), 
         menu_button_handler
-        ))
+    ))
     
     # 4. Общий обработчик текстовых сообщений (для комментариев)
-    #    ВСЕ текстовые сообщения, которые НЕ являются командами и НЕ попали в пункт 3
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
     # 5. Обработчик новых участников (для группы)
@@ -79,9 +134,21 @@ async def main() -> None:
         ChatMemberHandler.MY_CHAT_MEMBER
     ))
 
-    # Запуск фоновой синхронизации календаря
+    # ============================================
+    # ЗАПУСК ФОНОВЫХ ЗАДАЧ
+    # ============================================
+    
+    # Синхронизация календаря (каждые 6 часов)
     asyncio.create_task(sync_loop())
     logger.info("Фоновая синхронизация календаря запущена")
+    
+    # Напоминания о мероприятиях (каждые 5 минут)
+    asyncio.create_task(reminder_loop(application))
+    logger.info("Фоновая проверка напоминаний запущена")
+    
+    # Утренняя сводка (в 9:00)
+    asyncio.create_task(morning_summary_loop(application))
+    logger.info("Планировщик утренней сводки запущен")
 
     try:
         logger.info("Бот запущен")
@@ -89,6 +156,7 @@ async def main() -> None:
         await application.start()
         await application.updater.start_polling()
         
+        # Держим бота запущенным
         while True:
             await asyncio.sleep(3600)
             
@@ -106,6 +174,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    from datetime import datetime, timedelta
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
