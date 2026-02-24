@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timedelta
 
 from telegram import Update
 from telegram.ext import (
@@ -17,7 +18,12 @@ from handlers.message import message_handler
 from handlers.menu import menu_button_handler
 from handlers.assign import assign_handler
 from services.sync_scheduler import sync_loop
-from services.reminder import find_upcoming_events, send_reminder
+from services.reminder import (
+    find_upcoming_events, 
+    send_reminder, 
+    auto_complete_events,
+    log_notification
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -46,16 +52,20 @@ async def reminder_loop(application: Application):
     while True:
         try:
             logger.info("Проверка событий для напоминаний")
-            events = await find_upcoming_events(minutes_before=35)
             
+            # 1. Отправка напоминаний о предстоящих событиях
+            events = await find_upcoming_events(minutes_before=35)
             if events:
                 logger.info(f"Найдено {len(events)} событий для напоминаний")
+                for event in events:
+                    if event.get('telegram_id'):  # если есть ответственный
+                        await send_reminder(event, application.bot)
+                        await asyncio.sleep(1)  # пауза между сообщениями
             
-            for event in events:
-                if event.get('telegram_id'):  # если есть ответственный
-                    await send_reminder(event, application.bot)
-                    # Небольшая пауза между сообщениями
-                    await asyncio.sleep(1)
+            # 2. Автоматическое завершение прошедших мероприятий
+            completed_count = await auto_complete_events()
+            if completed_count > 0:
+                logger.info(f"Автоматически завершено {completed_count} мероприятий")
             
         except Exception as e:
             logger.error(f"Ошибка в цикле напоминаний: {e}", exc_info=True)
@@ -88,6 +98,32 @@ async def morning_summary_loop(application: Application):
             
         except Exception as e:
             logger.error(f"Ошибка в цикле утренней сводки: {e}", exc_info=True)
+
+
+async def afternoon_report_loop(application: Application):
+    """
+    Цикл для дневного отчёта менеджеру.
+    Запускается в 14:00 каждый день.
+    """
+    while True:
+        try:
+            now = datetime.now()
+            # Вычисляем время до следующего 14:00
+            next_run = now.replace(hour=14, minute=0, second=0, microsecond=0)
+            if now >= next_run:
+                next_run += timedelta(days=1)
+            
+            wait_seconds = (next_run - now).total_seconds()
+            logger.info(f"Дневной отчёт запланирован через {wait_seconds/3600:.1f} часов")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Отправляем отчёт
+            from services.reminder import send_afternoon_report
+            await send_afternoon_report(application.bot)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в цикле дневного отчёта: {e}", exc_info=True)
 
 
 async def main() -> None:
@@ -149,6 +185,10 @@ async def main() -> None:
     # Утренняя сводка (в 9:00)
     asyncio.create_task(morning_summary_loop(application))
     logger.info("Планировщик утренней сводки запущен")
+    
+    # Дневной отчёт (в 14:00)
+    asyncio.create_task(afternoon_report_loop(application))
+    logger.info("Планировщик дневного отчёта запущен")
 
     try:
         logger.info("Бот запущен")
@@ -174,7 +214,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    from datetime import datetime, timedelta
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:

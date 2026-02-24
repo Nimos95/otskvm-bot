@@ -143,3 +143,111 @@ async def send_unconfirmed_report(bot):
     # TODO: реализовать позже
     logger.info("Отчёт о неподтверждённых будет реализован позже")
     pass
+
+async def auto_complete_events() -> int:
+    """
+    Автоматически отмечает как выполненные мероприятия,
+    которые закончились более часа назад и не были отмечены вручную.
+    
+    Returns:
+        int: количество обновлённых записей
+    """
+    pool = get_db_pool()
+    
+    # Правильный синтаксис: end_time < NOW() - INTERVAL '1 hour'
+    result = await pool.execute(
+        """
+        UPDATE event_assignments 
+        SET status = 'done', completed_at = NOW()
+        WHERE event_id IN (
+            SELECT id FROM calendar_events 
+            WHERE end_time < NOW() - INTERVAL '1 hour'
+        )
+        AND status IN ('accepted', 'assigned')
+        """
+    )
+    
+    # Парсим результат, чтобы получить количество обновлённых строк
+    # asyncpg возвращает строку типа "UPDATE X"
+    import re
+    match = re.search(r'UPDATE (\d+)', result)
+    count = int(match.group(1)) if match else 0
+    
+    if count > 0:
+        logger.info(f"Автоматически завершено {count} мероприятий")
+    
+    return count
+
+async def send_completion_reminder(event: Dict[str, Any], bot):
+    """Отправляет напоминание о необходимости отметить выполнение."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
+    event_id = event['event_id']
+    title = event['title']
+    engineer_id = event['telegram_id']
+    engineer_name = event['engineer_name']
+    
+    russian_title = cyrtranslit.to_cyrillic(title)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Отметить выполнение", callback_data=f"complete_{event_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await bot.send_message(
+        chat_id=engineer_id,
+        text=(
+            f"❓ **Мероприятие завершено?**\n\n"
+            f"📌 **Мероприятие:** {russian_title}\n\n"
+            f"Если вы уже провели мероприятие, отметьте его как выполненное:"
+        ),
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def send_afternoon_report(bot):
+    """
+    Отправляет дневной отчёт менеджеру о статусах мероприятий.
+    """
+    from config import config
+    
+    if not config.GROUP_CHAT_ID:
+        return
+    
+    pool = get_db_pool()
+    
+    # Получаем статистику за сегодня
+    rows = await pool.fetch(
+        """
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) as confirmed,
+            SUM(CASE WHEN status = 'assigned' THEN 1 ELSE 0 END) as pending
+        FROM event_assignments ea
+        JOIN calendar_events ce ON ea.event_id = ce.id
+        WHERE DATE(ce.start_time) = CURRENT_DATE
+        """
+    )
+    
+    if rows:
+        data = rows[0]
+        total = data['total'] or 0
+        completed = data['completed'] or 0
+        confirmed = data['confirmed'] or 0
+        pending = data['pending'] or 0
+        
+        report = (
+            f"📊 **Дневной отчёт**\n\n"
+            f"📅 **Мероприятий сегодня:** {total}\n"
+            f"✅ **Выполнено:** {completed}\n"
+            f"👍 **Подтверждено:** {confirmed}\n"
+            f"⏳ **Ожидают:** {pending}\n"
+        )
+        
+        await bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            message_thread_id=config.TOPIC_ID,
+            text=report,
+            parse_mode="Markdown"
+        )

@@ -94,10 +94,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data.startswith("decline_"):
         event_id = data.split("_")[1]
         await decline_assignment(query, user_id, event_id)
+    elif data.startswith("complete_"):
+        event_id = int(data.split("_")[1])
+        await complete_event_manually(query, user_id, event_id, context)
     elif data == "assign_multi":
         await query.answer("Функция в разработке")
     else:
         await query.edit_message_text("Неизвестная команда")
+    
 
 
 async def confirm_assignment(query, user_id, event_id, context):
@@ -258,6 +262,95 @@ async def notify_manager_about_replacement(event_info, user_id, context):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+async def complete_event_manually(query, user_id, event_id, context):
+    """Ручное завершение мероприятия инженером."""
+    pool = get_db_pool()
+    
+    try:
+        # Проверяем, что инженер действительно назначен на это мероприятие
+        assignment = await pool.fetchrow(
+            """
+            SELECT status FROM event_assignments 
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        if not assignment:
+            await query.answer("❌ Вы не назначены на это мероприятие", show_alert=True)
+            return
+        
+        # Обновляем статус
+        await pool.execute(
+            """
+            UPDATE event_assignments 
+            SET status = 'done', completed_at = NOW()
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        # Логируем
+        await log_notification(event_id, user_id, 'manual_completion')
+        
+        await query.answer("✅ Мероприятие отмечено как выполненное!")
+        await query.edit_message_text(
+            "✅ Вы отметили мероприятие как выполненное.\n"
+            "Спасибо за работу!"
+        )
+        
+        # Уведомляем менеджера
+        await notify_manager_about_completion(event_id, user_id, context)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при ручном завершении: {e}")
+        await query.answer("❌ Произошла ошибка")
+
+async def notify_manager_about_completion(event_id, user_id, context):
+    """Уведомляет менеджера о завершении мероприятия."""
+    from config import config
+    
+    if not config.GROUP_CHAT_ID:
+        return
+    
+    pool = get_db_pool()
+    
+    # Получаем информацию о мероприятии и инженере
+    info = await pool.fetchrow(
+        """
+        SELECT 
+            ce.title,
+            ce.start_time,
+            u.full_name as engineer_name
+        FROM calendar_events ce
+        LEFT JOIN users u ON u.telegram_id = $2
+        WHERE ce.id = $1
+        """,
+        event_id,
+        user_id
+    )
+    
+    if info:
+        title = info['title']
+        russian_title = cyrtranslit.to_cyrillic(title)
+        time_str = info['start_time'].strftime("%d.%m %H:%M")
+        engineer_name = info['engineer_name']
+        
+        await context.bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            message_thread_id=config.TOPIC_ID,
+            text=(
+                f"✅ **Мероприятие выполнено**\n\n"
+                f"👤 **Инженер:** {engineer_name}\n"
+                f"📅 **Мероприятие:** {russian_title}\n"
+                f"🕐 **Время:** {time_str}\n\n"
+                f"Статус: выполнено"
+            ),
+            parse_mode="Markdown"
+        )
 
 
 async def show_main_menu(query):
