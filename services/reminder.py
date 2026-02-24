@@ -130,10 +130,121 @@ async def log_notification(event_id: int, user_id: int, notification_type: str):
 async def send_morning_summary(bot):
     """
     Отправляет утреннюю сводку о мероприятиях на сегодня.
+    Запускается в 9:00 каждый день.
+    
+    Args:
+        bot: экземпляр бота для отправки сообщений
     """
-    # TODO: реализовать позже
-    logger.info("Утренняя сводка будет реализована позже")
-    pass
+    from config import config
+    from datetime import datetime
+    import cyrtranslit
+    
+    if not config.GROUP_CHAT_ID:
+        logger.warning("GROUP_CHAT_ID не настроен, сводка не будет отправлена")
+        return
+    
+    pool = get_db_pool()
+    today = datetime.now().date()
+    
+    logger.info(f"Формируем утреннюю сводку на {today}")
+    
+    # Получаем все мероприятия на сегодня с назначениями
+    rows = await pool.fetch(
+        """
+        SELECT 
+            ce.id,
+            ce.title,
+            ce.start_time,
+            ce.end_time,
+            a.name as auditory_name,
+            a.building,
+            u.full_name as engineer_name,
+            u.telegram_id,
+            ea.status as assignment_status,
+            ea.confirmed_at
+        FROM calendar_events ce
+        LEFT JOIN auditories a ON ce.auditory_id = a.id
+        LEFT JOIN event_assignments ea ON ce.id = ea.event_id 
+            AND ea.status IN ('accepted', 'assigned', 'replacing')
+        LEFT JOIN users u ON ea.assigned_to = u.telegram_id
+        WHERE DATE(ce.start_time) = $1
+          AND ce.status = 'confirmed'
+        ORDER BY ce.start_time
+        """,
+        today
+    )
+    
+    if not rows:
+        await bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            message_thread_id=config.TOPIC_ID,
+            text="🌅 **Доброе утро!**\n\nНа сегодня мероприятий нет. Хорошего дня! ☀️",
+            parse_mode="Markdown"
+        )
+        logger.info("Утренняя сводка отправлена (мероприятий нет)")
+        return
+    
+    # Формируем сообщение
+    message = f"🌅 **Доброе утро!**\n\n📅 **Мероприятия на {today.strftime('%d.%m.%Y')}**\n\n"
+    
+    for event in rows:
+        time_str = event['start_time'].strftime("%H:%M")
+        end_time_str = event['end_time'].strftime("%H:%M")
+        
+        # Обратная транслитерация названия
+        title = event['title']
+        russian_title = cyrtranslit.to_cyrillic(title)
+        
+        # Название аудитории
+        auditory = event['auditory_name'] or 'не указана'
+        if event.get('building'):
+            auditory += f" ({event['building']})"
+        
+        # Информация об инженере
+        engineer = event['engineer_name'] or '❌ не назначен'
+        status = event['assignment_status']
+        
+        # Выбираем иконку в зависимости от статуса
+        if status == 'accepted':
+            status_icon = "✅"
+            status_text = "подтвердил"
+        elif status == 'assigned':
+            status_icon = "⏳"
+            status_text = "ожидает подтверждения"
+        elif status == 'replacing':
+            status_icon = "🔄"
+            status_text = "ищет замену"
+        else:
+            status_icon = "❌"
+            status_text = "не назначен"
+        
+        message += f"• **{time_str}–{end_time_str}** — {russian_title}\n"
+        message += f"  🏢 Ауд. {auditory}\n"
+        message += f"  {status_icon} {engineer} {status_text}\n\n"
+    
+    # Добавляем статистику
+    total = len(rows)
+    confirmed = sum(1 for e in rows if e['assignment_status'] == 'accepted')
+    pending = sum(1 for e in rows if e['assignment_status'] == 'assigned')
+    replacing = sum(1 for e in rows if e['assignment_status'] == 'replacing')
+    no_assign = sum(1 for e in rows if not e['assignment_status'])
+    
+    message += f"📊 **Статистика:**\n"
+    message += f"• Всего мероприятий: {total}\n"
+    message += f"• ✅ Подтверждено: {confirmed}\n"
+    message += f"• ⏳ Ожидают: {pending}\n"
+    message += f"• 🔄 Ищут замену: {replacing}\n"
+    message += f"• ❌ Не назначены: {no_assign}\n"
+    
+    # Отправляем
+    await bot.send_message(
+        chat_id=config.GROUP_CHAT_ID,
+        message_thread_id=config.TOPIC_ID,
+        text=message,
+        parse_mode="Markdown"
+    )
+    
+    logger.info(f"Утренняя сводка отправлена. Мероприятий: {total}")
 
 
 async def send_unconfirmed_report(bot):

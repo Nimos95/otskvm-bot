@@ -14,6 +14,7 @@ from database import Database, get_db_pool
 from utils.auditory_names import get_russian_name
 from handlers.today import get_events_for_date
 from handlers import start  
+from handlers.admin import admin_callbacks
 
 from handlers.assign import (
     show_engineers_for_event, assign_engineer_to_event,
@@ -97,6 +98,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data.startswith("complete_"):
         event_id = int(data.split("_")[1])
         await complete_event_manually(query, user_id, event_id, context)
+    elif data in admin_callbacks:
+        await admin_callbacks[data](update, context)
     elif data == "assign_multi":
         await query.answer("Функция в разработке")
     else:

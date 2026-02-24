@@ -13,18 +13,28 @@ logger = logging.getLogger(__name__)
 
 
 
-def get_main_menu_keyboard():
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton("📋 Аудитории")],
-            [KeyboardButton("📅 Расписание"), KeyboardButton("👥 Назначения")],  # ← добавили
-            [KeyboardButton("❓ Помощь")]
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Меню бота"
-    )
-    return keyboard
+async def get_main_menu_keyboard(user_id: int):
+    """Возвращает клавиатуру в зависимости от роли пользователя."""
+    from database import Database
+    
+    user = await Database.get_user(user_id)
+    role = user.get('role', 'engineer') if user else 'engineer'
+    
+    # Базовое меню для всех
+    keyboard = [
+        [KeyboardButton("📋 Аудитории")],
+        [KeyboardButton("📅 Расписание"), KeyboardButton("❓ Помощь")]
+    ]
+    
+    # Для менеджеров добавляем назначения
+    if role in ['superadmin', 'admin', 'manager']:
+        keyboard.insert(1, [KeyboardButton("👥 Назначения")])
+    
+    # Для superadmin добавляем админ-панель
+    if role == 'superadmin':
+        keyboard.append([KeyboardButton("🛠 Админ-панель")])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
 async def show_persistent_menu(update_or_query):
@@ -34,7 +44,20 @@ async def show_persistent_menu(update_or_query):
     Args:
         update_or_query: Update.message или CallbackQuery
     """
-    keyboard = get_main_menu_keyboard()
+    # Получаем user_id из разных типов объектов
+    if hasattr(update_or_query, 'from_user'):
+        user_id = update_or_query.from_user.id
+    elif hasattr(update_or_query, 'effective_user'):
+        user_id = update_or_query.effective_user.id
+    else:
+        user_id = None
+    
+    if not user_id:
+        logger.error("Не удалось определить user_id")
+        return
+    
+    # ВАЖНО: добавляем await!
+    keyboard = await get_main_menu_keyboard(user_id)
     
     try:
         # Проверяем тип объекта и отправляем сообщение правильным способом
@@ -71,7 +94,7 @@ async def show_persistent_menu(update_or_query):
                 parse_mode="Markdown"
             )
             
-        logger.info("Постоянное меню отображено")
+        logger.info(f"Постоянное меню отображено для пользователя {user_id}")
     except Exception as e:
         logger.error(f"Ошибка при показе меню: {e}")
 
@@ -109,3 +132,31 @@ async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     elif text == "❓ Помощь":
         await show_help(update.message)
+
+    elif text == "🛠 Админ-панель":
+        logger.info("Вызвана админ-панель")
+        from handlers.admin import admin_panel_handler
+        await admin_panel_handler(update, context)
+
+async def get_main_menu_keyboard(user_id: int):
+    """Возвращает клавиатуру в зависимости от роли пользователя."""
+    from database import Database
+    
+    user = await Database.get_user(user_id)
+    role = user.get('role', 'engineer') if user else 'engineer'
+    
+    # Базовое меню для всех
+    keyboard = [
+        [KeyboardButton("📋 Аудитории")],
+        [KeyboardButton("📅 Расписание"), KeyboardButton("❓ Помощь")]
+    ]
+    
+    # Для менеджеров добавляем назначения
+    if role in ['superadmin', 'admin', 'manager']:
+        keyboard.insert(1, [KeyboardButton("👥 Назначения")])
+    
+    # Для superadmin добавляем админ-панель
+    if role == 'superadmin':
+        keyboard.append([KeyboardButton("🛠 Админ-панель")])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
