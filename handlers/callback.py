@@ -154,18 +154,7 @@ async def request_replacement(query, user_id, event_id, context):
     pool = get_db_pool()
     
     try:
-        # Меняем статус на 'replacement_requested'
-        result = await pool.execute(
-            """
-            UPDATE event_assignments 
-            SET status = 'replacement_requested'
-            WHERE event_id = $1 AND assigned_to = $2
-            """,
-            event_id,
-            user_id
-        )
-        
-        # Получаем информацию для уведомления
+        # Получаем информацию для уведомления с транслитерацией
         event_info = await pool.fetchrow(
             """
             SELECT 
@@ -175,6 +164,24 @@ async def request_replacement(query, user_id, event_id, context):
             FROM calendar_events ce
             LEFT JOIN users u ON u.telegram_id = $2
             WHERE ce.id = $1
+            """,
+            event_id,
+            user_id
+        )
+        
+        if event_info:
+            # Обратная транслитерация названия
+            title = event_info['title']
+            russian_title = cyrtranslit.to_cyrillic(title)
+            event_info = dict(event_info)
+            event_info['title'] = russian_title
+        
+        # Меняем статус на 'replacement_requested'
+        await pool.execute(
+            """
+            UPDATE event_assignments 
+            SET status = 'replacement_requested'
+            WHERE event_id = $1 AND assigned_to = $2
             """,
             event_id,
             user_id
@@ -227,6 +234,7 @@ async def notify_manager_about_replacement(event_info, user_id, context):
     if not config.GROUP_CHAT_ID:
         return
     
+    # Название уже должно быть с транслитерацией
     title = event_info['title']
     time_str = event_info['start_time'].strftime("%d.%m %H:%M")
     engineer_name = event_info['engineer_name']

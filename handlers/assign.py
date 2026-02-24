@@ -339,7 +339,11 @@ async def show_assign_list(query, context):
             self.from_user = from_user
             self.bot = bot
             self.text = "/assign"
-            self.reply_text = lambda *args, **kwargs: None  # заглушка
+            self.reply_text = self._fake_reply_text
+        
+        async def _fake_reply_text(self, *args, **kwargs):
+            """Заглушка для reply_text"""
+            pass
     
     class FakeUpdate:
         def __init__(self, message):
