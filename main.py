@@ -24,6 +24,7 @@ from services.reminder import (
     auto_complete_events,
     log_notification
 )
+from handlers.admin import admin_panel_handler, manage_roles_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -151,6 +152,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("status", status.status_handler))
     application.add_handler(CommandHandler("today", today.today_handler))
     application.add_handler(CommandHandler("assign", assign_handler))
+    application.add_handler(CommandHandler("setrole", manage_roles_handler))
     
     # 2. Inline-кнопки
     application.add_handler(CallbackQueryHandler(callback_handler))

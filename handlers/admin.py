@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from utils.roles import require_roles, check_permission, ROLE_NAMES
+from utils.roles import set_user_role, ROLE_NAMES, require_roles
+
 from database import get_db_pool
 from services.reminder import (
     find_upcoming_events, 
@@ -19,7 +22,7 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-
+@require_roles(['superadmin'])
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Показывает панель администратора с тестовыми функциями.
@@ -44,7 +47,7 @@ async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="Markdown"
     )
 
-
+@require_roles(['superadmin'])
 async def test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Тестирует систему напоминаний.
@@ -83,7 +86,7 @@ async def test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
-
+@require_roles(['superadmin'])
 async def send_test_reminder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовое напоминание для первого найденного события.
@@ -106,7 +109,7 @@ async def send_test_reminder_handler(update: Update, context: ContextTypes.DEFAU
         f"Инженер: {event['engineer_name']}"
     )
 
-
+@require_roles(['superadmin'])
 async def test_completion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Тестирует автоматическое завершение мероприятий.
@@ -146,7 +149,7 @@ async def test_completion_handler(update: Update, context: ContextTypes.DEFAULT_
     
     await query.edit_message_text(text, parse_mode="Markdown")
 
-
+@require_roles(['superadmin'])
 async def test_morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовую утреннюю сводку.
@@ -161,7 +164,7 @@ async def test_morning_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         "Проверьте топик с ботом."
     )
 
-
+@require_roles(['superadmin'])
 async def test_afternoon_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовый дневной отчёт.
@@ -176,7 +179,7 @@ async def test_afternoon_handler(update: Update, context: ContextTypes.DEFAULT_T
         "Проверьте топик с ботом."
     )
 
-
+@require_roles(['superadmin'])
 async def test_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Запускает принудительную синхронизацию с Google Calendar.
@@ -193,7 +196,7 @@ async def test_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Проверьте таблицу calendar_events."
     )
 
-
+@require_roles(['superadmin'])
 async def test_db_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Показывает статистику по таблицам БД.
@@ -234,6 +237,51 @@ async def test_db_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+@require_roles(['superadmin'])
+async def manage_roles_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Управление ролями пользователей (только для superadmin).
+    """
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ Использование: /setrole @username роль\n\n"
+            "Доступные роли:\n"
+            "👑 superadmin — полный доступ\n"
+            "📊 admin — просмотр статистики\n"
+            "📋 manager — управление\n"
+            "🔧 engineer — базовый доступ\n"
+            "👁️ viewer — только просмотр"
+        )
+        return
+    
+    username = context.args[0].replace('@', '')
+    new_role = context.args[1].lower()
+    
+    # Находим пользователя по username
+    pool = get_db_pool()
+    user = await pool.fetchrow(
+        "SELECT telegram_id FROM users WHERE username = $1",
+        username
+    )
+    
+    if not user:
+        await update.message.reply_text(f"❌ Пользователь @{username} не найден")
+        return
+    
+    # Устанавливаем роль
+    success = await set_user_role(
+        update.effective_user.id,
+        user['telegram_id'],
+        new_role
+    )
+    
+    if success:
+        await update.message.reply_text(
+            f"✅ Роль для @{username} изменена на {ROLE_NAMES.get(new_role, new_role)}"
+        )
+    else:
+        await update.message.reply_text("❌ Не удалось изменить роль")
 
 
 # Словарь для маппинга callback_data

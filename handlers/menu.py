@@ -152,7 +152,7 @@ async def get_main_menu_keyboard(user_id: int):
     ]
     
     # Для менеджеров добавляем назначения
-    if role in ['superadmin', 'admin', 'manager']:
+    if role in ['superadmin', 'manager']:
         keyboard.insert(1, [KeyboardButton("👥 Назначения")])
     
     # Для superadmin добавляем админ-панель
