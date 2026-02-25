@@ -113,9 +113,6 @@ async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text
     user_id = update.effective_user.id
 
-        # Отладка
-    print(f"🔥 Нажата кнопка: {text}")
-    await update.message.reply_text(f"Обработчик сработал! Кнопка: {text}")
     
     logger.info(f"Пользователь {user_id} нажал кнопку: {text}")
     
