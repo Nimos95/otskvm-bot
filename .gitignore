@@ -3,7 +3,8 @@ venv/
 venv*/
 .env
 .env.local
-.env.production
+.env.prod
+.env.dev
 
 # Secrets
 credentials.json

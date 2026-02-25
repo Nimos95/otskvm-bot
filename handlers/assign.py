@@ -111,7 +111,7 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-@require_roles(['superadmin', 'admin', 'manager'])
+
 async def show_engineers_for_event(query, event_id):
     """
     Показывает список инженеров для назначения на мероприятие.
@@ -219,7 +219,6 @@ async def show_engineers_for_event(query, event_id):
         parse_mode="Markdown"
     )
 
-@require_roles(['superadmin', 'admin', 'manager'])
 async def assign_engineer_to_event(query, context, user_id, event_id, engineer_id):
     """
     Назначает инженера на мероприятие.
@@ -319,7 +318,6 @@ async def accept_assignment(query, user_id, event_id):
         "✅ Вы подтвердили участие в мероприятии."
     )
 
-@require_roles(['superadmin', 'manager'])
 async def show_assign_list(query, context):
     """
     Показывает список мероприятий для назначения (возврат из callback).
