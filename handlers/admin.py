@@ -28,7 +28,6 @@ async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     Показывает панель администратора с тестовыми функциями.
     Доступно только для superadmin.
     """
-    # TODO: добавить проверку роли superadmin
     keyboard = [
         [InlineKeyboardButton("📅 Тест напоминаний", callback_data="test_reminders")],
         [InlineKeyboardButton("✅ Тест завершения", callback_data="test_completion")],
