@@ -165,15 +165,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data.startswith("assign_multi_"):
         event_id = data.split("_")[2]
-        await show_multi_assign(query, event_id)
+        await show_multi_assign(query, context, event_id)
 
     elif data.startswith("multi_toggle_"):
         parts = data.split("_")
-        # multi_toggle_eventId_engineerId
         if len(parts) >= 4:
             event_id = parts[2]
             engineer_id = parts[3]
-            await multi_toggle_handler(query, user_id, event_id, engineer_id)
+            await multi_toggle_handler(query, context, user_id, event_id, engineer_id)
 
     elif data.startswith("multi_confirm_"):
         event_id = data.split("_")[2]

@@ -409,7 +409,7 @@ async def decline_assignment(query, user_id, event_id):
         "❌ Вы отказались от участия в мероприятии."
     )
 
-async def show_multi_assign(query, event_id):
+async def show_multi_assign(query, context, event_id):
     """
     Показывает интерфейс для назначения нескольких инженеров на мероприятие.
     """
@@ -434,7 +434,7 @@ async def show_multi_assign(query, event_id):
         await query.edit_message_text("Мероприятие не найдено")
         return
     
-    # Получаем список инженеров (кто уже назначен — показываем отдельно)
+    # Получаем список инженеров
     engineers = await pool.fetch(
         """
         SELECT 
@@ -473,9 +473,9 @@ async def show_multi_assign(query, event_id):
         f"_(нажмите на инженера, чтобы выбрать/снять выбор)_\n\n"
     )
     
-    # Сохраняем в user_data выбранных инженеров
-    query.user_data = query.user_data if hasattr(query, 'user_data') else {}
-    selected = query.user_data.get('selected_engineers', set())
+    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    key = f"selected_engineers_{event_id}"
+    selected = context.user_data.get(key, set())
     
     keyboard = []
     
@@ -523,15 +523,17 @@ async def show_multi_assign(query, event_id):
     )
 
 
-async def multi_toggle_handler(query, user_id, event_id, engineer_id):
+async def multi_toggle_handler(query, context, user_id, event_id, engineer_id):
     """
     Добавляет/удаляет инженера из списка выбранных.
     """
-    # Сохраняем выбранных инженеров в user_data
-    if 'selected_engineers' not in query.user_data:
-        query.user_data['selected_engineers'] = set()
+    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    key = f"selected_engineers_{event_id}"
     
-    selected = query.user_data['selected_engineers']
+    if key not in context.user_data:
+        context.user_data[key] = set()
+    
+    selected = context.user_data[key]
     
     if engineer_id in selected:
         selected.remove(engineer_id)
@@ -539,14 +541,16 @@ async def multi_toggle_handler(query, user_id, event_id, engineer_id):
         selected.add(engineer_id)
     
     # Обновляем отображение
-    await show_multi_assign(query, event_id)
+    await show_multi_assign(query, context, event_id)
 
 
 async def multi_confirm_handler(query, context, user_id, event_id):
     """
     Подтверждает назначение всех выбранных инженеров.
     """
-    selected = query.user_data.get('selected_engineers', set())
+    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    key = f"selected_engineers_{event_id}"
+    selected = context.user_data.get(key, set())
     
     if not selected:
         await query.answer("❌ Никто не выбран", show_alert=True)
@@ -586,7 +590,7 @@ async def multi_confirm_handler(query, context, user_id, event_id):
         success_count += 1
     
     # Очищаем выбранных
-    query.user_data['selected_engineers'] = set()
+    context.user_data.pop(key, None)
     
     await query.answer(f"✅ Назначено: {success_count}, уже были назначены: {already_count}")
     
