@@ -149,7 +149,7 @@ async def show_engineers_for_event(query, event_id):
             ea.role as assigned_role
         FROM users u
         LEFT JOIN event_assignments ea ON u.telegram_id = ea.assigned_to AND ea.event_id = $1
-        WHERE u.role IN ('superadmin', 'engineer', 'admin', 'manager')
+        WHERE u.role IN ('superadmin', 'engineer', 'manager')
         ORDER BY 
             CASE WHEN ea.id IS NOT NULL THEN 0 ELSE 1 END,
             u.full_name
