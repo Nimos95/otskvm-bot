@@ -408,3 +408,235 @@ async def decline_assignment(query, user_id, event_id):
     await query.edit_message_text(
         "❌ Вы отказались от участия в мероприятии."
     )
+
+async def show_multi_assign(query, event_id):
+    """
+    Показывает интерфейс для назначения нескольких инженеров на мероприятие.
+    """
+    pool = get_db_pool()
+    
+    # Получаем информацию о мероприятии
+    event_row = await pool.fetchrow(
+        """
+        SELECT 
+            ce.title,
+            ce.start_time,
+            a.name as auditory_name,
+            a.building
+        FROM calendar_events ce
+        LEFT JOIN auditories a ON ce.auditory_id = a.id
+        WHERE ce.id = $1
+        """,
+        int(event_id)
+    )
+    
+    if not event_row:
+        await query.edit_message_text("Мероприятие не найдено")
+        return
+    
+    # Получаем список инженеров (кто уже назначен — показываем отдельно)
+    engineers = await pool.fetch(
+        """
+        SELECT 
+            u.telegram_id,
+            u.full_name,
+            u.role,
+            ea.id as assignment_id,
+            ea.status as assignment_status,
+            ea.role as assigned_role
+        FROM users u
+        LEFT JOIN event_assignments ea ON u.telegram_id = ea.assigned_to AND ea.event_id = $1
+        WHERE u.role IN ('engineer', 'manager')
+        ORDER BY 
+            CASE WHEN ea.id IS NOT NULL THEN 0 ELSE 1 END,
+            u.full_name
+        """,
+        int(event_id)
+    )
+    
+    # Форматируем дату
+    date_str = event_row["start_time"].strftime("%d.%m.%Y %H:%M")
+    
+    # Обратная транслитерация
+    title = event_row["title"]
+    russian_title = cyrtranslit.to_cyrillic(title)
+    
+    auditory = get_russian_name(event_row["auditory_name"]) if event_row["auditory_name"] else "нет аудитории"
+    building = event_row["building"] or ""
+    location = f"{auditory} {building}".strip()
+    
+    text = (
+        f"📅 **Мероприятие:** {russian_title}\n"
+        f"🕐 **Время:** {date_str}\n"
+        f"🏢 **Аудитория:** {location}\n\n"
+        f"**Выберите инженеров для назначения:**\n"
+        f"_(нажмите на инженера, чтобы выбрать/снять выбор)_\n\n"
+    )
+    
+    # Сохраняем в user_data выбранных инженеров
+    query.user_data = query.user_data if hasattr(query, 'user_data') else {}
+    selected = query.user_data.get('selected_engineers', set())
+    
+    keyboard = []
+    
+    for eng in engineers:
+        eng_id = eng["telegram_id"]
+        name = eng["full_name"]
+        status = eng["assignment_status"] if eng["assignment_status"] else None
+        
+        # Проверяем, выбран ли инженер
+        is_selected = eng_id in selected
+        
+        if is_selected:
+            btn_text = f"✅ {name}"
+        elif status == "accepted":
+            btn_text = f"✅ {name} (подтвердил)"
+        elif status == "assigned":
+            btn_text = f"⏳ {name} (ожидает)"
+        else:
+            btn_text = f"👤 {name}"
+        
+        keyboard.append([InlineKeyboardButton(
+            btn_text,
+            callback_data=f"multi_toggle_{event_id}_{eng_id}"
+        )])
+    
+    # Кнопка для подтверждения назначения
+    if selected:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"✅ Назначить выбранных ({len(selected)})", 
+                callback_data=f"multi_confirm_{event_id}"
+            )
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton("« Назад к списку", callback_data=f"assign_event_{event_id}")
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+
+async def multi_toggle_handler(query, user_id, event_id, engineer_id):
+    """
+    Добавляет/удаляет инженера из списка выбранных.
+    """
+    # Сохраняем выбранных инженеров в user_data
+    if 'selected_engineers' not in query.user_data:
+        query.user_data['selected_engineers'] = set()
+    
+    selected = query.user_data['selected_engineers']
+    
+    if engineer_id in selected:
+        selected.remove(engineer_id)
+    else:
+        selected.add(engineer_id)
+    
+    # Обновляем отображение
+    await show_multi_assign(query, event_id)
+
+
+async def multi_confirm_handler(query, context, user_id, event_id):
+    """
+    Подтверждает назначение всех выбранных инженеров.
+    """
+    selected = query.user_data.get('selected_engineers', set())
+    
+    if not selected:
+        await query.answer("❌ Никто не выбран", show_alert=True)
+        return
+    
+    pool = get_db_pool()
+    success_count = 0
+    already_count = 0
+    
+    for engineer_id in selected:
+        # Проверяем, не назначен ли уже
+        existing = await pool.fetchrow(
+            "SELECT id FROM event_assignments WHERE event_id = $1 AND assigned_to = $2",
+            int(event_id),
+            int(engineer_id)
+        )
+        
+        if existing:
+            already_count += 1
+            continue
+        
+        # Назначаем инженера
+        await pool.execute(
+            """
+            INSERT INTO event_assignments 
+            (event_id, assigned_to, assigned_by, role, status, assigned_at)
+            VALUES ($1, $2, $3, 'primary', 'assigned', NOW())
+            """,
+            int(event_id),
+            int(engineer_id),
+            int(user_id)
+        )
+        
+        # Отправляем уведомление
+        await send_assignment_notification(context, event_id, engineer_id)
+        
+        success_count += 1
+    
+    # Очищаем выбранных
+    query.user_data['selected_engineers'] = set()
+    
+    await query.answer(f"✅ Назначено: {success_count}, уже были назначены: {already_count}")
+    
+    # Возвращаемся к списку инженеров
+    await show_engineers_for_event(query, event_id)
+
+
+async def send_assignment_notification(context, event_id, engineer_id):
+    """
+    Отправляет уведомление назначенному инженеру.
+    """
+    pool = get_db_pool()
+    
+    event_info = await pool.fetchrow(
+        """
+        SELECT 
+            ce.title,
+            ce.start_time
+        FROM calendar_events ce
+        WHERE ce.id = $1
+        """,
+        int(event_id)
+    )
+    
+    if not event_info:
+        return
+    
+    date_str = event_info["start_time"].strftime("%d.%m.%Y %H:%M")
+    title = event_info["title"]
+    russian_title = cyrtranslit.to_cyrillic(title)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Принять", callback_data=f"accept_{event_id}"),
+            InlineKeyboardButton("❌ Отказаться", callback_data=f"decline_{event_id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await context.bot.send_message(
+            chat_id=int(engineer_id),
+            text=(
+                f"🔔 **Вам назначено мероприятие!**\n\n"
+                f"📅 **Мероприятие:** {russian_title}\n"
+                f"🕐 **Время:** {date_str}\n\n"
+                f"Пожалуйста, подтвердите участие:"
+            ),
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Не удалось отправить уведомление инженеру {engineer_id}: {e}")

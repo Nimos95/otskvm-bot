@@ -30,7 +30,8 @@ from handlers.help import (
 
 from handlers.assign import (
     show_engineers_for_event, assign_engineer_to_event,
-    accept_assignment, decline_assignment, show_assign_list
+    accept_assignment, decline_assignment, show_assign_list,
+    show_multi_assign, multi_toggle_handler, multi_confirm_handler
 )
 
 logger = logging.getLogger(__name__)
@@ -162,8 +163,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         event_id = int(data.split("_")[2])
         await engineer_complete_handler(query, user_id, event_id, context)
 
-    elif data == "assign_multi":
-        await query.answer("Функция в разработке")
+    elif data.startswith("assign_multi_"):
+        event_id = data.split("_")[2]
+        await show_multi_assign(query, event_id)
+
+    elif data.startswith("multi_toggle_"):
+        parts = data.split("_")
+        # multi_toggle_eventId_engineerId
+        if len(parts) >= 4:
+            event_id = parts[2]
+            engineer_id = parts[3]
+            await multi_toggle_handler(query, user_id, event_id, engineer_id)
+
+    elif data.startswith("multi_confirm_"):
+        event_id = data.split("_")[2]
+        await multi_confirm_handler(query, context, user_id, event_id)
 
     else:
         await query.edit_message_text("Неизвестная команда")
