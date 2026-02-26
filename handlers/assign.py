@@ -294,7 +294,7 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
             logger.error(f"Не удалось отправить уведомление инженеру {engineer_id}: {e}")
     
     # Показываем обновлённый список
-    await show_engineers_for_event(query, context) # ← возвращаемся к списку мероприятий
+    await show_assign_list(query, context) # ← возвращаемся к списку мероприятий
 
 
 async def accept_assignment(query, user_id, event_id):
