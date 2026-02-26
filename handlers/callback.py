@@ -16,6 +16,18 @@ from handlers.today import get_events_for_date
 from handlers import start  
 from handlers.admin import admin_callbacks
 
+from handlers.help import (
+    show_help_menu,
+    show_help,
+    help_commands_handler,
+    help_roles_handler,
+    help_statuses_handler,
+    help_schedule_handler,
+    help_assign_handler,
+    help_notifications_handler,
+    help_faq_handler
+)
+
 from handlers.assign import (
     show_engineers_for_event, assign_engineer_to_event,
     accept_assignment, decline_assignment, show_assign_list
@@ -69,7 +81,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif data == "back_to_main":
         await show_persistent_menu(query)
     elif data == "help":
-        await show_help(query)
+        # Перенаправляем на новое меню помощи
+        from handlers.help import show_help_menu
+        await show_help_menu(query)
     elif data == "first_start":
         await start.first_start_handler(update, context)
     elif data == "assign_list":
@@ -100,6 +114,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await complete_event_manually(query, user_id, event_id, context)
     elif data in admin_callbacks:
         await admin_callbacks[data](update, context)
+    elif data == "help_main":
+        from handlers.help import show_help_menu
+        await show_help_menu(query)
+    elif data == "help_commands":
+        await help_commands_handler(query)
+    elif data == "help_roles":
+        await help_roles_handler(query)
+    elif data == "help_statuses":
+        await help_statuses_handler(query)
+    elif data == "help_schedule":
+        await help_schedule_handler(query)
+    elif data == "help_assign":
+        await help_assign_handler(query)
+    elif data == "help_notifications":
+        await help_notifications_handler(query)
+    elif data == "help_faq":
+        await help_faq_handler(query)
     elif data == "assign_multi":
         await query.answer("Функция в разработке")
     else:
