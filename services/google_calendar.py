@@ -142,6 +142,7 @@ class GoogleCalendarClient:
                 if auditory_name:
                     # Транслитерируем название аудитории для поиска в БД
                     en_auditory = cyrtranslit.to_latin(auditory_name)
+                    # logger.info(f"  Транслитерированное название: '{en_auditory}'")
                     row = await pool.fetchrow(
                         "SELECT id FROM auditories WHERE name = $1",
                         en_auditory
