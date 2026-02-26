@@ -139,6 +139,10 @@ async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         from handlers.engineer_tasks import show_my_events
         await show_my_events(update.message, user_id)
 
+    elif text == "🔄 Обновить меню":
+        logger.info(f"Пользователь {user_id} обновляет меню")
+        await show_persistent_menu(update)
+
 async def get_main_menu_keyboard(user_id: int):
     """Возвращает клавиатуру в зависимости от роли пользователя."""
     from database import Database
@@ -163,5 +167,8 @@ async def get_main_menu_keyboard(user_id: int):
     # Для superadmin добавляем админ-панель
     if role == 'superadmin':
         keyboard.append([KeyboardButton("🛠 Админ-панель")])
+
+    # 🔥 ДЛЯ ВСЕХ: кнопка обновления меню
+    keyboard.append([KeyboardButton("🔄 Обновить меню")])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
