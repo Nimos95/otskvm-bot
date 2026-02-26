@@ -14,19 +14,14 @@ logger = logging.getLogger(__name__)
 async def find_upcoming_events(minutes_before: int = 35) -> List[Dict[str, Any]]:
     """
     Находит события, которые начнутся через указанное количество минут.
-    
-    Args:
-        minutes_before: количество минут до начала события
-        
-    Returns:
-        Список событий с информацией об ответственных
+    Отправляем напоминания только тем, у кого статус 'assigned' (ещё не подтвердили).
     """
     pool = get_db_pool()
     
     # Вычисляем временной диапазон: от current_time+25 до current_time+35 минут
     now = datetime.now()
-    time_from = now + timedelta(minutes=minutes_before - 10)  # ← было пропущено
-    time_to = now + timedelta(minutes=minutes_before)        # ← было пропущено
+    time_from = now + timedelta(minutes=minutes_before - 10)
+    time_to = now + timedelta(minutes=minutes_before)
     
     logger.info(f"Ищем события с {time_from} по {time_to}")
     
@@ -44,7 +39,7 @@ async def find_upcoming_events(minutes_before: int = 35) -> List[Dict[str, Any]]
         FROM calendar_events ce
         LEFT JOIN auditories a ON ce.auditory_id = a.id
         LEFT JOIN event_assignments ea ON ce.id = ea.event_id 
-            AND ea.status IN ('assigned', 'accepted')
+            AND ea.status = 'assigned'  -- 🔥 ТОЛЬКО ТЕ, КТО ЕЩЁ НЕ ПОДТВЕРДИЛ!
         LEFT JOIN users u ON ea.assigned_to = u.telegram_id
         WHERE ce.start_time BETWEEN $1 AND $2
           AND ce.status = 'confirmed'
@@ -54,7 +49,7 @@ async def find_upcoming_events(minutes_before: int = 35) -> List[Dict[str, Any]]
         time_to
     )
     
-    logger.info(f"Найдено событий: {len(rows)}")
+    logger.info(f"Найдено событий для напоминаний: {len(rows)}")
     return [dict(row) for row in rows]
 
 
