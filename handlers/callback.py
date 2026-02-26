@@ -164,7 +164,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == "assign_multi":
         await query.answer("Функция в разработке")
-        
+
     else:
         await query.edit_message_text("Неизвестная команда")
     
@@ -853,7 +853,7 @@ async def notify_manager_about_early_completion(event_id, user_id, context):
     if info:
         title = info['title']
         russian_title = cyrtranslit.to_cyrillic(title)
-        start_time = info['start_time'].strftime("%H:%M")
+        end_time = info['end_time'].strftime("%H:%M")
         engineer_name = info['engineer_name']
         
         await context.bot.send_message(
@@ -863,7 +863,7 @@ async def notify_manager_about_early_completion(event_id, user_id, context):
                 f"⏱️ **Досрочное завершение**\n\n"
                 f"👤 **Инженер:** {engineer_name}\n"
                 f"📅 **Мероприятие:** {russian_title}\n"
-                f"🕐 **Планировалось до:** {start_time}\n\n"
+                f"🕐 **Планировалось до:** {end_time}\n\n"
                 f"Завершено досрочно!"
             ),
             parse_mode="Markdown"
