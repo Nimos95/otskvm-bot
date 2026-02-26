@@ -191,14 +191,25 @@ async def send_morning_summary(bot):
         title = event['title']
         russian_title = cyrtranslit.to_cyrillic(title)
         
-        # 🔥 ИСПРАВЛЕНИЕ: русское название аудитории через маппинг
+        # 🔥 ИСПРАВЛЕНИЕ: русское название аудитории и корпуса
         auditory = 'не указана'
+        building = ''
+        
         if event['auditory_name']:
             auditory = get_russian_name(event['auditory_name'])
-            if event.get('building'):
-                # Корпуса тоже через маппинг
-                building = get_russian_name(event['building']) if event['building'] else ''
-                auditory += f" ({building})"
+        
+        if event.get('building'):
+            building = get_russian_name(event['building'])
+        
+        # Формируем строку с аудиторией
+        if auditory != 'не указана' and building:
+            location = f"{auditory} ({building})"
+        elif auditory != 'не указана':
+            location = auditory
+        elif building:
+            location = f"ауд. не указана ({building})"
+        else:
+            location = "ауд. не указана"
         
         # Информация об инженере
         engineer = event['engineer_name'] or '❌ не назначен'
@@ -219,7 +230,7 @@ async def send_morning_summary(bot):
             status_text = "не назначен"
         
         message += f"• **{time_str}–{end_time_str}** — {russian_title}\n"
-        message += f"  🏢 Ауд. {auditory}\n"
+        message += f"  🏢 Ауд. {location}\n"
         message += f"  {status_icon} {engineer} {status_text}\n\n"
     
     # Добавляем статистику
@@ -244,7 +255,6 @@ async def send_morning_summary(bot):
     )
     
     logger.info(f"Утренняя сводка отправлена. Мероприятий: {total}")
-
 
 async def send_unconfirmed_report(bot):
     """
