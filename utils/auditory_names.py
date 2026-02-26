@@ -14,14 +14,18 @@ AUDITORY_NAMES = {
     '335': '335',
     'Kabinet Rektora': 'Кабинет Ректора',
     'SKC': 'СКЦ',
+    # названия корпусов
+    'GUK': 'ГУК',
+    'NIK': 'НИК',
+    '1UK': '1УК',
 }
 
 def get_russian_name(english_name: str) -> str:
-    """Возвращает русское название аудитории."""
+    """Возвращает русское название аудитории или корпуса."""
     return AUDITORY_NAMES.get(english_name, english_name)
 
 def get_english_name(russian_name: str) -> str:
-    """Возвращает английское название аудитории (для поиска в БД)."""
+    """Возвращает английское название аудитории или корпуса (для поиска в БД)."""
     # Создаём обратный словарь
     reverse_map = {v: k for k, v in AUDITORY_NAMES.items()}
     return reverse_map.get(russian_name, russian_name)
