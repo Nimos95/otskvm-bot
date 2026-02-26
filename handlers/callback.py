@@ -48,17 +48,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     if data == "list_auditories":
         await show_auditories(query)
+
     elif data == "schedule_menu":
         await show_schedule_menu(query)
+
     elif data == "today_schedule":
         await show_today_schedule_calendar(query)
+
     elif data == "tomorrow_schedule":
         await show_tomorrow_schedule_calendar(query)
+
     elif data == "week_schedule":
         await show_week_schedule_calendar(query)
+
     elif data.startswith("aud_"):
         auditory_id = data[4:]
         await show_status_buttons(query, auditory_id, context)
+
     elif data.startswith("set_"):
         parts = data.split("_")
         if len(parts) >= 3:
@@ -78,61 +84,87 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     "(отправьте текстовое сообщение или /cancel для отмены)",
                     parse_mode="Markdown"
                 )
+
     elif data == "back_to_main":
         await show_persistent_menu(query)
+
     elif data == "help":
         # Перенаправляем на новое меню помощи
         from handlers.help import show_help_menu
         await show_help_menu(query)
+
     elif data == "first_start":
         await start.first_start_handler(update, context)
+
     elif data == "assign_list":
         await show_assign_list(query, context)
+
     elif data.startswith("assign_event_"):
         event_id = data.split("_")[2]
         await show_engineers_for_event(query, event_id)
+
     elif data.startswith("assign_to_"):
         parts = data.split("_")
         if len(parts) >= 4:
             event_id = parts[2]
             engineer_id = parts[3]
             await assign_engineer_to_event(query, context, user_id, event_id, engineer_id)
+
     elif data.startswith("confirm_"):
         event_id = int(data.split("_")[1])
         await confirm_assignment(query, user_id, event_id, context)
+
     elif data.startswith("replace_"):
         event_id = int(data.split("_")[1])
         await request_replacement(query, user_id, event_id, context)
+
     elif data.startswith("accept_"):
         event_id = data.split("_")[1]
         await accept_assignment(query, user_id, event_id)
+
     elif data.startswith("decline_"):
         event_id = data.split("_")[1]
         await decline_assignment(query, user_id, event_id)
+
     elif data.startswith("complete_"):
         event_id = int(data.split("_")[1])
         await complete_event_manually(query, user_id, event_id, context)
+
     elif data in admin_callbacks:
         await admin_callbacks[data](update, context)
+
     elif data == "help_main":
         from handlers.help import show_help_menu
         await show_help_menu(query)
+
     elif data == "help_commands":
         await help_commands_handler(query)
+
     elif data == "help_roles":
         await help_roles_handler(query)
+
     elif data == "help_statuses":
         await help_statuses_handler(query)
+
     elif data == "help_schedule":
         await help_schedule_handler(query)
+
     elif data == "help_assign":
         await help_assign_handler(query)
+
     elif data == "help_notifications":
         await help_notifications_handler(query)
+
     elif data == "help_faq":
         await help_faq_handler(query)
+
+    elif data.startswith("engineer_complete_"):
+        event_id = int(data.split("_")[2])
+        await engineer_complete_handler(query, user_id, event_id, context)
+
     elif data == "assign_multi":
         await query.answer("Функция в разработке")
+        
     else:
         await query.edit_message_text("Неизвестная команда")
     
@@ -741,4 +773,98 @@ async def set_status_from_button(query, context, user_id, auditory_id, status, c
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("« Назад", callback_data=f"aud_{auditory_id}")]
             ])
+        )
+
+async def engineer_complete_handler(query, user_id, event_id, context):
+    """
+    Обработчик досрочного завершения из списка мероприятий инженера.
+    """
+    pool = get_db_pool()
+    
+    try:
+        # Проверяем, что инженер назначен на это мероприятие
+        assignment = await pool.fetchrow(
+            """
+            SELECT status FROM event_assignments 
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        if not assignment:
+            await query.answer("❌ Вы не назначены на это мероприятие", show_alert=True)
+            return
+        
+        # Обновляем статус
+        await pool.execute(
+            """
+            UPDATE event_assignments 
+            SET status = 'done', completed_at = NOW()
+            WHERE event_id = $1 AND assigned_to = $2
+            """,
+            event_id,
+            user_id
+        )
+        
+        # Логируем
+        await log_notification(event_id, user_id, 'early_completion')
+        
+        await query.answer("✅ Мероприятие завершено досрочно!")
+        
+        # Обновляем сообщение, убирая кнопку
+        await query.edit_message_text(
+            query.message.text + "\n\n✅ **Мероприятие завершено досрочно!**",
+            parse_mode="Markdown"
+        )
+        
+        # Уведомляем менеджера
+        await notify_manager_about_early_completion(event_id, user_id, context)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при досрочном завершении: {e}")
+        await query.answer("❌ Произошла ошибка", show_alert=True)
+
+
+async def notify_manager_about_early_completion(event_id, user_id, context):
+    """Уведомляет менеджера о досрочном завершении."""
+    from config import config
+    
+    if not config.GROUP_CHAT_ID:
+        return
+    
+    pool = get_db_pool()
+    
+    info = await pool.fetchrow(
+        """
+        SELECT 
+            ce.title,
+            ce.start_time,
+            ce.end_time,
+            u.full_name as engineer_name
+        FROM calendar_events ce
+        LEFT JOIN users u ON u.telegram_id = $2
+        WHERE ce.id = $1
+        """,
+        event_id,
+        user_id
+    )
+    
+    if info:
+        title = info['title']
+        russian_title = cyrtranslit.to_cyrillic(title)
+        start_time = info['start_time'].strftime("%H:%M")
+        engineer_name = info['engineer_name']
+        
+        await context.bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            message_thread_id=config.TOPIC_ID,
+            text=(
+                f"⏱️ **Досрочное завершение**\n\n"
+                f"👤 **Инженер:** {engineer_name}\n"
+                f"📅 **Мероприятие:** {russian_title}\n"
+                f"🕐 **Планировалось до:** {start_time}\n\n"
+                f"Завершено досрочно!"
+            ),
+            parse_mode="Markdown"
         )

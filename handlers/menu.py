@@ -135,6 +135,10 @@ async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         from handlers.admin import admin_panel_handler
         await admin_panel_handler(update, context)
 
+    elif text == "📋 Мои мероприятия":
+        from handlers.engineer_tasks import show_my_events
+        await show_my_events(update.message, user_id)
+
 async def get_main_menu_keyboard(user_id: int):
     """Возвращает клавиатуру в зависимости от роли пользователя."""
     from database import Database
@@ -147,6 +151,10 @@ async def get_main_menu_keyboard(user_id: int):
         [KeyboardButton("📋 Аудитории")],
         [KeyboardButton("📅 Расписание"), KeyboardButton("❓ Помощь")]
     ]
+    
+    # 🔥 ДЛЯ ИНЖЕНЕРОВ И НАЧАЛЬНИКА: добавляем раздел с их мероприятиями
+    if role in ['superadmin', 'manager', 'engineer']:
+        keyboard.insert(1, [KeyboardButton("📋 Мои мероприятия")])
     
     # Для менеджеров добавляем назначения
     if role in ['superadmin', 'manager']:
