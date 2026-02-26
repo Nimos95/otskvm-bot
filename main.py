@@ -43,36 +43,32 @@ async def new_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def reminder_loop(application: Application):
-    """
-    Бесконечный цикл проверки приближающихся событий.
-    Запускается каждые 5 минут.
-    
-    Args:
-        application: экземпляр приложения для доступа к bot
-    """
+    """Бесконечный цикл проверки событий."""
     while True:
         try:
-            logger.info("Проверка событий для напоминаний")
+            # 1. Напоминания о предстоящих событиях
+            upcoming_events = await find_upcoming_events(minutes_before=35)
+            for event in upcoming_events:
+                if event.get('telegram_id'):
+                    await send_reminder(event, application.bot)
+                    await asyncio.sleep(1)
             
-            # 1. Отправка напоминаний о предстоящих событиях
-            events = await find_upcoming_events(minutes_before=35)
-            if events:
-                logger.info(f"Найдено {len(events)} событий для напоминаний")
-                for event in events:
-                    if event.get('telegram_id'):  # если есть ответственный
-                        await send_reminder(event, application.bot)
-                        await asyncio.sleep(1)  # пауза между сообщениями
+            # 2. Напоминания о завершении
+            completed_events = await find_completed_events()
+            for event in completed_events:
+                if event.get('telegram_id'):
+                    await send_completion_reminder(event, application.bot)
+                    await asyncio.sleep(1)
             
-            # 2. Автоматическое завершение прошедших мероприятий
-            completed_count = await auto_complete_events()
-            if completed_count > 0:
-                logger.info(f"Автоматически завершено {completed_count} мероприятий")
+            # 3. Автоматическое завершение
+            auto_completed = await auto_complete_events()
+            if auto_completed > 0:
+                logger.info(f"Автоматически завершено {auto_completed} мероприятий")
             
         except Exception as e:
             logger.error(f"Ошибка в цикле напоминаний: {e}", exc_info=True)
         
-        # Проверяем каждые 5 минут
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # каждые 5 минут
 
 
 async def morning_summary_loop(application: Application):

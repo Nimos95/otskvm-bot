@@ -56,6 +56,7 @@ async def find_upcoming_events(minutes_before: int = 35) -> List[Dict[str, Any]]
 async def send_reminder(event: Dict[str, Any], bot):
     """
     Отправляет напоминание ответственному инженеру.
+    Отправляет только если статус назначения 'assigned' (не подтверждён).
     
     Args:
         event: словарь с данными о событии
@@ -68,6 +69,45 @@ async def send_reminder(event: Dict[str, Any], bot):
     start_time = event['start_time']
     engineer_id = event['telegram_id']
     engineer_name = event['engineer_name'] or 'Инженер'
+    
+    # 🔍 ПРОВЕРКА 1: Получаем актуальный статус из БД
+    pool = get_db_pool()
+    current_status = await pool.fetchval(
+        """
+        SELECT status FROM event_assignments 
+        WHERE event_id = $1 AND assigned_to = $2
+        """,
+        event_id,
+        engineer_id
+    )
+    
+    # Если статус не 'assigned' — не отправляем напоминание
+    if current_status != 'assigned':
+        if current_status == 'accepted':
+            logger.info(f"Инженер {engineer_name} уже подтвердил участие в мероприятии {event_id}, напоминание пропущено")
+        elif current_status == 'replacing':
+            logger.info(f"Инженер {engineer_name} запросил замену на мероприятие {event_id}, напоминание пропущено")
+        elif current_status == 'done':
+            logger.info(f"Мероприятие {event_id} уже завершено, напоминание пропущено")
+        else:
+            logger.info(f"Мероприятие {event_id} имеет статус {current_status}, напоминание пропущено")
+        return
+    
+    # 🔍 ПРОВЕРКА 2: Проверяем, не отправляли ли уже напоминание за последние 2 часа
+    recent = await pool.fetchval(
+        """
+        SELECT COUNT(*) FROM notifications 
+        WHERE event_id = $1 AND user_id = $2 
+          AND type = 'reminder' 
+          AND sent_at > NOW() - INTERVAL '2 hours'
+        """,
+        event_id,
+        engineer_id
+    )
+    
+    if recent > 0:
+        logger.info(f"Напоминание для мероприятия {event_id} уже отправлялось менее 2 часов назад, пропускаем")
+        return
     
     # Форматируем время
     time_str = start_time.strftime("%H:%M")
@@ -105,7 +145,7 @@ async def send_reminder(event: Dict[str, Any], bot):
     # Логируем в таблицу notifications
     await log_notification(event_id, engineer_id, 'reminder')
     
-    logger.info(f"Напоминание отправлено {engineer_name} (ID: {engineer_id})")
+    logger.info(f"Напоминание отправлено {engineer_name} (ID: {engineer_id}) для мероприятия {event_id}")
 
 
 async def log_notification(event_id: int, user_id: int, notification_type: str):
@@ -367,3 +407,49 @@ async def send_afternoon_report(bot):
             text=report,
             parse_mode="Markdown"
         )
+
+async def find_completed_events() -> List[Dict[str, Any]]:
+    """
+    Находит мероприятия, которые закончились 15-30 минут назад
+    и ещё не отмечены как выполненные.
+    Отправляем напоминания только тем, у кого статус 'accepted' (подтвердили, но не завершили).
+    
+    Returns:
+        List[Dict[str, Any]]: Список событий для отправки напоминаний о завершении
+    """
+    pool = get_db_pool()
+    
+    now = datetime.now()
+    time_from = now - timedelta(minutes=30)
+    time_to = now - timedelta(minutes=15)
+    
+    logger.info(f"Ищем завершённые мероприятия с {time_from} по {time_to}")
+    
+    rows = await pool.fetch(
+        """
+        SELECT 
+            ce.id as event_id,
+            ce.title,
+            ce.start_time,
+            ce.end_time,
+            a.name as auditory_name,
+            a.building,
+            ea.assigned_to,
+            u.full_name as engineer_name,
+            u.telegram_id
+        FROM calendar_events ce
+        LEFT JOIN auditories a ON ce.auditory_id = a.id
+        JOIN event_assignments ea ON ce.id = ea.event_id 
+            AND ea.status = 'accepted'  -- 🔥 ТОЛЬКО ТЕ, КТО ПОДТВЕРДИЛ, НО НЕ ЗАВЕРШИЛ
+        JOIN users u ON ea.assigned_to = u.telegram_id
+        WHERE ce.end_time BETWEEN $1 AND $2
+          AND ce.status = 'confirmed'
+          AND ea.status != 'done'
+        ORDER BY ce.end_time
+        """,
+        time_from,
+        time_to
+    )
+    
+    logger.info(f"Найдено завершённых мероприятий: {len(rows)}")
+    return [dict(row) for row in rows]
