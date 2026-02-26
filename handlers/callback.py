@@ -275,11 +275,15 @@ async def request_replacement(query, user_id, event_id, context):
 async def notify_manager_about_confirmation(event_info, user_id, context):
     """Уведомляет менеджера о подтверждении инженера."""
     from config import config
+    import cyrtranslit
     
     if not config.GROUP_CHAT_ID:
         return
     
     title = event_info['title']
+    # 🔥 ИСПРАВЛЕНИЕ: обратная транслитерация
+    russian_title = cyrtranslit.to_cyrillic(title)
+    
     time_str = event_info['start_time'].strftime("%d.%m %H:%M")
     engineer_name = event_info['engineer_name']
     
@@ -289,7 +293,7 @@ async def notify_manager_about_confirmation(event_info, user_id, context):
         text=(
             f"✅ **Подтверждение получено**\n\n"
             f"👤 **Инженер:** {engineer_name}\n"
-            f"📅 **Мероприятие:** {title}\n"
+            f"📅 **Мероприятие:** {russian_title}\n"  # ← исправлено
             f"🕐 **Время:** {time_str}\n\n"
             f"Статус подтверждён."
         ),
@@ -300,12 +304,14 @@ async def notify_manager_about_confirmation(event_info, user_id, context):
 async def notify_manager_about_replacement(event_info, user_id, context):
     """Уведомляет менеджера о запросе замены."""
     from config import config
+    import cyrtranslit
     
     if not config.GROUP_CHAT_ID:
         return
     
     # Название уже должно быть с транслитерацией
     title = event_info['title']
+    russian_title = cyrtranslit.to_cyrillic(title)
     time_str = event_info['start_time'].strftime("%d.%m %H:%M")
     engineer_name = event_info['engineer_name']
     
@@ -321,7 +327,7 @@ async def notify_manager_about_replacement(event_info, user_id, context):
         text=(
             f"🔄 **Запрос на замену!**\n\n"
             f"👤 **Инженер:** {engineer_name}\n"
-            f"📅 **Мероприятие:** {title}\n"
+            f"📅 **Мероприятие:** {russian_title}\n"
             f"🕐 **Время:** {time_str}\n\n"
             f"Требуется срочно найти замену!"
         ),
