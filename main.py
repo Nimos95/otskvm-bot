@@ -22,6 +22,8 @@ from services.reminder import (
     find_upcoming_events, 
     send_reminder, 
     auto_complete_events,
+    find_completed_events,      # ← новая функция
+    send_completion_reminder,    # ← новая функция (опционально)
     log_notification
 )
 from handlers.admin import admin_panel_handler, manage_roles_handler
