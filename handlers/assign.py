@@ -322,45 +322,73 @@ async def show_assign_list(query, context):
     """
     Показывает список мероприятий для назначения (возврат из callback).
     """
-    from handlers.assign import assign_handler
+    # Получаем pool для запросов к БД
+    pool = get_db_pool()
+    today = datetime.now().date()
     
-    # Получаем информацию о пользователе
-    user_id = query.from_user.id
-    full_name = query.from_user.full_name or "Пользователь"
+    # Получаем те же данные, что и в assign_handler
+    days_range = getattr(config, 'ASSIGN_DAYS_RANGE', 5)
+    dates = [today + timedelta(days=i) for i in range(days_range)]
     
-    # Удаляем текущее сообщение
-    await query.message.delete()
+    placeholders = ','.join([f'${i+1}' for i in range(len(dates))])
     
-    # Создаём фейковый update для assign_handler
-    class FakeMessage:
-        def __init__(self, chat, from_user, bot):
-            self.chat = chat
-            self.chat_id = chat.id
-            self.from_user = from_user
-            self.bot = bot
-            self.text = "/assign"
-            self.reply_text = self._fake_reply_text
-        
-        async def _fake_reply_text(self, *args, **kwargs):
-            """Заглушка для reply_text"""
-            pass
-    
-    class FakeUpdate:
-        def __init__(self, message):
-            self.message = message
-            self.effective_user = message.from_user
-            self.effective_chat = message.chat
-            self.callback_query = None
-    
-    fake_message = FakeMessage(
-        query.message.chat,
-        query.from_user,
-        context.bot
+    rows = await pool.fetch(
+        f"""
+        SELECT 
+            ce.id,
+            ce.title,
+            ce.start_time,
+            ce.end_time,
+            a.name as auditory_name,
+            a.building
+        FROM calendar_events ce
+        LEFT JOIN auditories a ON ce.auditory_id = a.id
+        WHERE DATE(ce.start_time) IN ({placeholders})
+          AND ce.status = 'confirmed'
+        ORDER BY ce.start_time
+        """,
+        *dates
     )
-    fake_update = FakeUpdate(fake_message)
     
-    # Вызываем обработчик напрямую
-    await assign_handler(fake_update, context)
+    if not rows:
+        await query.edit_message_text("📅 На ближайшие дни нет мероприятий для назначения.")
+        return
+    
+    # Формируем сообщение с кнопками
+    text = "📋 **Выберите мероприятие для назначения ответственного:**\n\n"
+    
+    keyboard = []
+    for event in rows:
+        event_id = event["id"]
+        date_str = event["start_time"].strftime("%a, %d.%m %H:%M")
+        title = event["title"]
+        russian_title = cyrtranslit.to_cyrillic(title)
+        
+        auditory = get_russian_name(event["auditory_name"]) if event["auditory_name"] else "нет аудитории"
+        building = event["building"] or ""
+        location = f"{auditory} {building}".strip()
+        
+        button_text = f"{date_str} — {russian_title}"
+        if location:
+            button_text += f" ({location})"
+        
+        if len(button_text) > 40:
+            button_text = button_text[:37] + "..."
+        
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"assign_event_{event_id}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("« Главное меню", callback_data="back_to_main")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Вместо удаления и создания фейкового update — просто редактируем текущее сообщение
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
 
 
 async def decline_assignment(query, user_id, event_id):
