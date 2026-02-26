@@ -130,14 +130,11 @@ async def log_notification(event_id: int, user_id: int, notification_type: str):
 async def send_morning_summary(bot):
     """
     Отправляет утреннюю сводку о мероприятиях на сегодня.
-    Запускается в 9:00 каждый день.
-    
-    Args:
-        bot: экземпляр бота для отправки сообщений
     """
     from config import config
     from datetime import datetime
     import cyrtranslit
+    from utils.auditory_names import get_russian_name  # добавить импорт
     
     if not config.GROUP_CHAT_ID:
         logger.warning("GROUP_CHAT_ID не настроен, сводка не будет отправлена")
@@ -148,7 +145,6 @@ async def send_morning_summary(bot):
     
     logger.info(f"Формируем утреннюю сводку на {today}")
     
-    # Получаем все мероприятия на сегодня с назначениями
     rows = await pool.fetch(
         """
         SELECT 
@@ -191,14 +187,18 @@ async def send_morning_summary(bot):
         time_str = event['start_time'].strftime("%H:%M")
         end_time_str = event['end_time'].strftime("%H:%M")
         
-        # Обратная транслитерация названия
+        # Обратная транслитерация названия мероприятия
         title = event['title']
         russian_title = cyrtranslit.to_cyrillic(title)
         
-        # Название аудитории
-        auditory = event['auditory_name'] or 'не указана'
-        if event.get('building'):
-            auditory += f" ({event['building']})"
+        # 🔥 ИСПРАВЛЕНИЕ: русское название аудитории через маппинг
+        auditory = 'не указана'
+        if event['auditory_name']:
+            auditory = get_russian_name(event['auditory_name'])
+            if event.get('building'):
+                # Корпуса тоже через маппинг
+                building = get_russian_name(event['building']) if event['building'] else ''
+                auditory += f" ({building})"
         
         # Информация об инженере
         engineer = event['engineer_name'] or '❌ не назначен'
@@ -236,7 +236,6 @@ async def send_morning_summary(bot):
     message += f"• 🔄 Ищут замену: {replacing}\n"
     message += f"• ❌ Не назначены: {no_assign}\n"
     
-    # Отправляем
     await bot.send_message(
         chat_id=config.GROUP_CHAT_ID,
         message_thread_id=config.TOPIC_ID,
