@@ -10,6 +10,8 @@ from telegram.ext import (
     MessageHandler, filters, ChatMemberHandler, ContextTypes
 )
 
+from handlers.engineer_tasks import register_handlers as register_engineer_tasks
+
 from config import config
 from database import close_db_pool, init_db_pool
 from handlers import start, status, today
@@ -152,21 +154,26 @@ async def main() -> None:
     application.add_handler(CommandHandler("assign", assign_handler))
     application.add_handler(CommandHandler("setrole", manage_roles_handler))
     
-    # 2. Inline-кнопки
+    # 1.5 СПЕЦИФИЧНЫЕ CallbackHandler'ы (с конкретными pattern)
+    # Регистрация обработчиков engineer_tasks (отмена и завершение мероприятий)
+    register_engineer_tasks(application)
+    logger.info("Обработчики engineer_tasks зарегистрированы")
+    
+    # 2. Общий обработчик inline-кнопок (для всех остальных callback)
     application.add_handler(CallbackQueryHandler(callback_handler))
     
-    # 3. Постоянное меню (текстовые кнопки) - ДО общего обработчика!
+    # 3. Постоянное меню (текстовые кнопки)
     application.add_handler(MessageHandler(
         filters.Text(["📋 Аудитории", "📅 Расписание", "👥 Назначения", 
                   "❓ Помощь", "📋 Мои мероприятия", "🛠 Админ-панель",
-                  "🔄 Обновить меню"]),  # ← добавили
+                  "🔄 Обновить меню"]),
         menu_button_handler
     ))
     
-    # 4. Общий обработчик текстовых сообщений (для комментариев)
+    # 4. Общий обработчик текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    # 5. Обработчик новых участников (для группы)
+    # 5. Обработчик новых участников
     application.add_handler(ChatMemberHandler(
         new_chat_member_handler, 
         ChatMemberHandler.MY_CHAT_MEMBER

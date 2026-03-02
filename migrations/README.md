@@ -12,6 +12,7 @@
    psql -U postgres -d otskvmbot -f migrations/v0.2.0_calendar.sql
    psql -U postgres -d otskvmbot -f migrations/v0.3.0_assignments.sql
    psql -U postgres -d otskvmbot -f migrations/v0.4.0_notifications.sql
+   psql -U postgres -d otskvmbot -f migrations/v0.4.4_create_cancellation_log
    ```
 3. **После создания пользователя bot_user выполните**
    ```bash
@@ -28,6 +29,7 @@
    DROP TABLE IF EXISTS status_log CASCADE;
    DROP TABLE IF EXISTS auditories CASCADE;
    DROP TABLE IF EXISTS users CASCADE;
+   DROP TABLE IF EXISTS cancellation_log CASCADE;
    ```
    
 # 📝 Примечания
