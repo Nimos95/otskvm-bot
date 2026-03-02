@@ -1,4 +1,9 @@
-"""Административные функции для тестирования и отладки бота."""
+"""Административные функции для тестирования и отладки бота.
+
+Доступные роли:
+- superadmin: полный доступ ко всем функциям
+- manager: доступ к синхронизации и базовым функциям
+"""
 
 import logging
 from datetime import datetime, timedelta
@@ -6,9 +11,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from utils.roles import require_roles, check_permission, ROLE_NAMES
-from utils.roles import set_user_role, ROLE_NAMES, require_roles
-
+from utils.roles import require_roles, check_permission, ROLE_NAMES, set_user_role
 from database import get_db_pool
 from services.reminder import (
     find_upcoming_events, 
@@ -22,35 +25,207 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-@require_roles(['superadmin'])
+
+# ============================================
+# АДМИН-ПАНЕЛЬ (доступна manager и superadmin)
+# ============================================
+
+@require_roles(['manager', 'superadmin'])
 async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Показывает панель администратора с тестовыми функциями.
-    Доступно только для superadmin.
+    Показывает панель администратора.
+    Доступно для manager и superadmin.
     """
+    # Проверяем, откуда пришёл вызов
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id
+        message = query.message
+    else:
+        # Вызов из текстовой кнопки меню
+        user_id = update.effective_user.id
+        message = update.message
+    
+    # Определяем роль пользователя
+    from utils.roles import get_user_role
+    role = await get_user_role(user_id)
+    
+    # Базовые кнопки для всех (manager и superadmin)
     keyboard = [
-        [InlineKeyboardButton("📅 Тест напоминаний", callback_data="test_reminders")],
-        [InlineKeyboardButton("✅ Тест завершения", callback_data="test_completion")],
-        [InlineKeyboardButton("🌅 Тест утренней сводки", callback_data="test_morning")],
-        [InlineKeyboardButton("📊 Тест дневного отчёта", callback_data="test_afternoon")],
-        [InlineKeyboardButton("🔄 Тест синхронизации", callback_data="test_sync")],
-        [InlineKeyboardButton("📋 Проверка БД", callback_data="test_db")],
-        [InlineKeyboardButton("« Главное меню", callback_data="back_to_main")]
+        [InlineKeyboardButton("🔄 Принудительная синхронизация", callback_data="admin_sync")],
+        [InlineKeyboardButton("📋 Проверка БД", callback_data="admin_db_stats")],
     ]
+    
+    # Для superadmin добавляем тестовые функции
+    if role == 'superadmin':
+        keyboard.extend([
+            [InlineKeyboardButton("📅 Тест напоминаний", callback_data="admin_test_reminders")],
+            [InlineKeyboardButton("✅ Тест завершения", callback_data="admin_test_completion")],
+            [InlineKeyboardButton("🌅 Тест утренней сводки", callback_data="admin_test_morning")],
+            [InlineKeyboardButton("📊 Тест дневного отчёта", callback_data="admin_test_afternoon")],
+            [InlineKeyboardButton("🔄 Тест синхронизации", callback_data="admin_test_sync")],
+        ])
+    
+    # Кнопка возврата
+    keyboard.append([InlineKeyboardButton("« Главное меню", callback_data="back_to_main")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        "🛠 **Панель администратора**\n\n"
-        "Выберите тестовую функцию:",
+    # Отправляем/редактируем сообщение в зависимости от источника
+    if update.callback_query:
+        await query.edit_message_text(
+            "🛠 **Панель управления**\n\nВыберите действие:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    else:
+        await message.reply_text(
+            "🛠 **Панель управления**\n\nВыберите действие:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+
+
+# ============================================
+# ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ (manager и superadmin)
+# ============================================
+
+@require_roles(['manager', 'superadmin'])
+async def admin_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Принудительная синхронизация с Google Calendar.
+    Доступно для manager и superadmin.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Отправляем сообщение о начале
+    await query.edit_message_text(
+        "🔄 **Синхронизация с Google Calendar...**\n\n"
+        "Пожалуйста, подождите. Это может занять до минуты.",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        start_time = datetime.now()
+        
+        # Запускаем синхронизацию
+        await sync_calendar(days=30)
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        
+        # Получаем статистику после синхронизации
+        pool = get_db_pool()
+        stats = await pool.fetchrow(
+            """
+            SELECT 
+                COUNT(*) as total_events,
+                COUNT(*) FILTER (WHERE start_time > NOW()) as upcoming
+            FROM calendar_events
+            """
+        )
+        
+        # Успешное завершение
+        await query.edit_message_text(
+            f"✅ **Синхронизация завершена!**\n\n"
+            f"📊 **Результат:**\n"
+            f"• Всего событий в БД: {stats['total_events']}\n"
+            f"• Предстоящих: {stats['upcoming']}\n"
+            f"• Время выполнения: {duration:.1f} сек.\n\n"
+            f"🕐 {end_time.strftime('%d.%m.%Y %H:%M:%S')}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад в админ-панель", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+        
+        logger.info(f"Принудительная синхронизация выполнена пользователем {query.from_user.id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при синхронизации: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ **Ошибка синхронизации**\n\n"
+            f"```\n{str(e)[:200]}\n```",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад в админ-панель", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+
+
+# ============================================
+# СТАТИСТИКА БД (manager и superadmin)
+# ============================================
+
+@require_roles(['manager', 'superadmin'])
+async def admin_db_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Показывает статистику по таблицам БД.
+    Доступно для manager и superadmin.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    pool = get_db_pool()
+    
+    stats = await pool.fetchrow(
+        """
+        SELECT 
+            (SELECT COUNT(*) FROM users) as users_count,
+            (SELECT COUNT(*) FROM users WHERE role = 'engineer') as engineers_count,
+            (SELECT COUNT(*) FROM auditories WHERE is_active = true) as auditories_count,
+            (SELECT COUNT(*) FROM status_log WHERE created_at > NOW() - INTERVAL '7 days') as weekly_logs,
+            (SELECT COUNT(*) FROM calendar_events WHERE start_time > NOW()) as upcoming_events,
+            (SELECT COUNT(*) FROM event_assignments WHERE status = 'assigned') as pending_assignments,
+            (SELECT COUNT(*) FROM event_assignments WHERE status = 'accepted') as active_assignments,
+            (SELECT COUNT(*) FROM event_assignments WHERE status = 'cancelled') as cancelled_assignments,
+            (SELECT COUNT(*) FROM cancellation_log WHERE cancelled_at > NOW() - INTERVAL '7 days') as weekly_cancellations
+        """
+    )
+    
+    text = "📊 **Статистика базы данных**\n\n"
+    text += f"👥 **Пользователи:**\n"
+    text += f"• Всего: {stats['users_count']}\n"
+    text += f"• Инженеров: {stats['engineers_count']}\n\n"
+    
+    text += f"🏢 **Аудитории:**\n"
+    text += f"• Активных: {stats['auditories_count']}\n\n"
+    
+    text += f"📝 **Статусы:**\n"
+    text += f"• За 7 дней: {stats['weekly_logs']}\n\n"
+    
+    text += f"📅 **Мероприятия:**\n"
+    text += f"• Предстоящих: {stats['upcoming_events']}\n\n"
+    
+    text += f"👤 **Назначения:**\n"
+    text += f"• Ожидают: {stats['pending_assignments']}\n"
+    text += f"• Активных: {stats['active_assignments']}\n"
+    text += f"• Отменённых: {stats['cancelled_assignments']}\n\n"
+    
+    text += f"🚫 **Отмены за 7 дней:** {stats['weekly_cancellations']}"
+    
+    # Кнопка для возврата
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_panel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text,
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
+
+# ============================================
+# ТЕСТОВЫЕ ФУНКЦИИ (только superadmin)
+# ============================================
+
 @require_roles(['superadmin'])
-async def test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Тестирует систему напоминаний.
-    Показывает ближайшие события и отправляет тестовое напоминание.
+    Только для superadmin.
     """
     query = update.callback_query
     await query.answer()
@@ -75,7 +250,8 @@ async def test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     # Кнопка для отправки тестового напоминания
     keyboard = [
-        [InlineKeyboardButton("🔔 Отправить тестовое напоминание", callback_data="send_test_reminder")]
+        [InlineKeyboardButton("🔔 Отправить тестовое напоминание", callback_data="admin_send_test_reminder")],
+        [InlineKeyboardButton("« Назад", callback_data="admin_panel")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -85,10 +261,12 @@ async def test_reminders_handler(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
+
 @require_roles(['superadmin'])
-async def send_test_reminder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_send_test_reminder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовое напоминание для первого найденного события.
+    Только для superadmin.
     """
     query = update.callback_query
     await query.answer()
@@ -108,10 +286,12 @@ async def send_test_reminder_handler(update: Update, context: ContextTypes.DEFAU
         f"Инженер: {event['engineer_name']}"
     )
 
+
 @require_roles(['superadmin'])
-async def test_completion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_test_completion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Тестирует автоматическое завершение мероприятий.
+    Только для superadmin.
     """
     query = update.callback_query
     await query.answer()
@@ -146,126 +326,152 @@ async def test_completion_handler(update: Update, context: ContextTypes.DEFAULT_
         text = f"❌ Нет мероприятий для автоматического завершения.\n\n"
         text += f"Запущена проверка, но ничего не найдено."
     
-    await query.edit_message_text(text, parse_mode="Markdown")
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_panel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=reply_markup)
+
 
 @require_roles(['superadmin'])
-async def test_morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_test_morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовую утреннюю сводку.
+    Только для superadmin.
     """
     query = update.callback_query
     await query.answer()
     
     await send_morning_summary(context.bot)
     
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_panel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         "🌅 Тестовая утренняя сводка отправлена!\n"
-        "Проверьте топик с ботом."
+        "Проверьте топик с ботом.",
+        reply_markup=reply_markup
     )
 
+
 @require_roles(['superadmin'])
-async def test_afternoon_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_test_afternoon_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Отправляет тестовый дневной отчёт.
+    Только для superadmin.
     """
     query = update.callback_query
     await query.answer()
     
     await send_afternoon_report(context.bot)
     
-    await query.edit_message_text(
-        "📊 Тестовый дневной отчёт отправлен!\n"
-        "Проверьте топик с ботом."
-    )
-
-@require_roles(['superadmin'])
-async def test_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Запускает принудительную синхронизацию с Google Calendar.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text("🔄 Запускаю синхронизацию...")
-    
-    await sync_calendar(days=30)
-    
-    await query.edit_message_text(
-        "✅ Синхронизация завершена!\n"
-        "Проверьте таблицу calendar_events."
-    )
-
-@require_roles(['superadmin'])
-async def test_db_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Показывает статистику по таблицам БД.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    pool = get_db_pool()
-    
-    stats = await pool.fetch(
-        """
-        SELECT 
-            (SELECT COUNT(*) FROM users) as users_count,
-            (SELECT COUNT(*) FROM auditories) as auditories_count,
-            (SELECT COUNT(*) FROM status_log) as logs_count,
-            (SELECT COUNT(*) FROM calendar_events) as events_count,
-            (SELECT COUNT(*) FROM event_assignments) as assignments_count,
-            (SELECT COUNT(*) FROM notifications) as notifications_count
-        """
-    )
-    
-    row = stats[0]
-    
-    text = "📋 **Статистика базы данных**\n\n"
-    text += f"👥 Пользователи: {row['users_count']}\n"
-    text += f"🏢 Аудитории: {row['auditories_count']}\n"
-    text += f"📝 Записей статусов: {row['logs_count']}\n"
-    text += f"📅 Событий календаря: {row['events_count']}\n"
-    text += f"👤 Назначений: {row['assignments_count']}\n"
-    text += f"🔔 Уведомлений: {row['notifications_count']}\n"
-    
-    # Кнопка для возврата
     keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_panel")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        text,
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        "📊 Тестовый дневной отчёт отправлен!\n"
+        "Проверьте топик с ботом.",
+        reply_markup=reply_markup
     )
+
+
+@require_roles(['superadmin'])
+async def admin_test_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Тест синхронизации с Google Calendar.
+    Отличается от обычной синхронизации тем, что показывает подробный лог.
+    Только для superadmin.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🔄 Запускаю тестовую синхронизацию с подробным логированием..."
+    )
+    
+    try:
+        start_time = datetime.now()
+        
+        # Включаем подробное логирование для теста
+        import logging
+        old_level = logging.getLogger('services.google_calendar').level
+        logging.getLogger('services.google_calendar').setLevel(logging.DEBUG)
+        
+        await sync_calendar(days=30)
+        
+        # Возвращаем уровень логирования
+        logging.getLogger('services.google_calendar').setLevel(old_level)
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        
+        pool = get_db_pool()
+        new_events = await pool.fetchval(
+            "SELECT COUNT(*) FROM calendar_events WHERE last_sync > NOW() - INTERVAL '1 minute'"
+        )
+        
+        await query.edit_message_text(
+            f"✅ **Тестовая синхронизация завершена!**\n\n"
+            f"📊 **Результат:**\n"
+            f"• Новых/обновлённых событий: {new_events}\n"
+            f"• Время выполнения: {duration:.1f} сек.\n\n"
+            f"Подробности смотрите в логах.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при тестовой синхронизации: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ **Ошибка синхронизации**\n\n"
+            f"{str(e)}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+
+
+# ============================================
+# УПРАВЛЕНИЕ РОЛЯМИ (только superadmin)
+# ============================================
 
 @require_roles(['superadmin'])
 async def manage_roles_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Управление ролями пользователей (только для superadmin).
+    Использование: /setrole @username роль
     """
     if not context.args or len(context.args) < 2:
+        roles_text = "\n".join([f"• {role} — {desc}" for role, desc in ROLE_NAMES.items()])
         await update.message.reply_text(
-            "❌ Использование: /setrole @username роль\n\n"
-            "Доступные роли:\n"
-            "👑 superadmin — полный доступ\n"
-            "📊 admin — просмотр статистики\n"
-            "📋 manager — управление\n"
-            "🔧 engineer — базовый доступ\n"
-            "👁️ viewer — только просмотр"
+            f"❌ **Использование:** /setrole @username роль\n\n"
+            f"**Доступные роли:**\n{roles_text}",
+            parse_mode="Markdown"
         )
         return
     
     username = context.args[0].replace('@', '')
     new_role = context.args[1].lower()
     
+    # Проверяем существование роли
+    if new_role not in ROLE_NAMES:
+        await update.message.reply_text(
+            f"❌ Роль '{new_role}' не существует.\n\n"
+            f"Доступные роли: {', '.join(ROLE_NAMES.keys())}"
+        )
+        return
+    
     # Находим пользователя по username
     pool = get_db_pool()
     user = await pool.fetchrow(
-        "SELECT telegram_id FROM users WHERE username = $1",
+        "SELECT telegram_id, full_name FROM users WHERE username = $1",
         username
     )
     
     if not user:
-        await update.message.reply_text(f"❌ Пользователь @{username} не найден")
+        await update.message.reply_text(f"❌ Пользователь @{username} не найден в базе данных")
         return
     
     # Устанавливаем роль
@@ -277,20 +483,32 @@ async def manage_roles_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if success:
         await update.message.reply_text(
-            f"✅ Роль для @{username} изменена на {ROLE_NAMES.get(new_role, new_role)}"
+            f"✅ Роль для @{username} ({user['full_name']}) изменена на {ROLE_NAMES[new_role]}"
         )
     else:
         await update.message.reply_text("❌ Не удалось изменить роль")
 
 
-# Словарь для маппинга callback_data
+# ============================================
+# СЛОВАРЬ ДЛЯ МАППИНГА CALLBACK_DATA
+# ============================================
+
+# Основные обработчики (для manager и superadmin)
 admin_callbacks = {
     "admin_panel": admin_panel_handler,
-    "test_reminders": test_reminders_handler,
-    "send_test_reminder": send_test_reminder_handler,
-    "test_completion": test_completion_handler,
-    "test_morning": test_morning_handler,
-    "test_afternoon": test_afternoon_handler,
-    "test_sync": test_sync_handler,
-    "test_db": test_db_handler,
+    "admin_sync": admin_sync_handler,
+    "admin_db_stats": admin_db_stats_handler,
 }
+
+# Тестовые обработчики (только для superadmin)
+admin_test_callbacks = {
+    "admin_test_reminders": admin_test_reminders_handler,
+    "admin_send_test_reminder": admin_send_test_reminder_handler,
+    "admin_test_completion": admin_test_completion_handler,
+    "admin_test_morning": admin_test_morning_handler,
+    "admin_test_afternoon": admin_test_afternoon_handler,
+    "admin_test_sync": admin_test_sync_handler,
+}
+
+# Объединяем словари
+admin_callbacks.update(admin_test_callbacks)

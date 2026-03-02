@@ -190,6 +190,8 @@ class GoogleCalendarClient:
 # Создаём глобальный экземпляр клиента
 calendar_client = GoogleCalendarClient()
 
+__all__ = ['GoogleCalendarClient', 'calendar_client', 'sync_calendar']
+
 
 async def sync_calendar(days: int = 30):
     """Синхронизирует календарь с базой данных."""

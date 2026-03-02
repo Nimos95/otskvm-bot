@@ -11,6 +11,8 @@ from telegram.ext import (
 )
 
 from handlers.engineer_tasks import register_handlers as register_engineer_tasks
+from handlers.admin import admin_sync_handler
+from handlers.admin import admin_callbacks
 
 from config import config
 from database import close_db_pool, init_db_pool
@@ -158,6 +160,11 @@ async def main() -> None:
     # Регистрация обработчиков engineer_tasks (отмена и завершение мероприятий)
     register_engineer_tasks(application)
     logger.info("Обработчики engineer_tasks зарегистрированы")
+    
+    # Регистрация обработчиков админ-панели (синхронизация, статистика, тесты)
+    for pattern, handler in admin_callbacks.items():
+        application.add_handler(CallbackQueryHandler(handler, pattern=f"^{pattern}$"))
+    logger.info(f"Обработчики админ-панели зарегистрированы: {len(admin_callbacks)} шт.")
     
     # 2. Общий обработчик inline-кнопок (для всех остальных callback)
     application.add_handler(CallbackQueryHandler(callback_handler))
