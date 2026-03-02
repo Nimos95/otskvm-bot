@@ -31,7 +31,7 @@ async def get_main_menu_keyboard(user_id: int):
         keyboard.insert(1, [KeyboardButton("👥 Назначения")])
     
     # Для superadmin добавляем админ-панель
-    if role == 'superadmin':
+    if role in ['superadmin', 'manager']:
         keyboard.append([KeyboardButton("🛠 Админ-панель")])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
