@@ -1,4 +1,16 @@
-"""Модуль для отправки напоминаний о мероприятиях."""
+"""Модуль напоминаний и отчётов по мероприятиям.
+
+Задачи модуля:
+- находить предстоящие и недавно завершившиеся мероприятия для точечных напоминаний инженерам;
+- контролировать, что напоминания не дублируются и не отправляются по уже завершённым событиям;
+- автоматически завершать «забытые» мероприятия по истечении времени;
+- формировать утренние сводки и дневные отчёты для руководителей.
+
+Используемые компоненты:
+- `database.get_db_pool` — доступ к PostgreSQL;
+- `core.constants` — единые статусы назначений и типы уведомлений;
+- утилиты `utils.auditory_names` и `utils.translit` для человекочитаемых названий.
+"""
 
 import logging
 import re
@@ -29,18 +41,34 @@ async def find_upcoming_events(minutes_before: int = 35) -> List[Dict[str, Any]]
     Args:
         minutes_before: за сколько минут до начала ищем события (по умолчанию 35)
         
-    Returns:
-        List[Dict[str, Any]]: Список событий для отправки напоминаний
+    Аргументы:
+        minutes_before: за сколько минут до начала искать события
+            (по умолчанию 35 минут; фактическое окно — от `minutes_before-10`
+            до `minutes_before`, чтобы покрыть погрешности в запуске cron‑задач).
+
+    Возвращает:
+        Список словарей с данными событий, для которых нужно отправить напоминания.
+
+    Примечания:
+        🔥 ВАЖНО: напоминания отправляются только:
+        - по подтверждённым мероприятиям (`calendar_events.status = 'confirmed'`);
+        - по назначениям со статусом `assigned` (инженер ещё не подтвердил);
+        - если ни один инженер ещё не завершил мероприятие (`NOT EXISTS ... status = 'done'`).
     """
     pool = get_db_pool()
     
-    # Вычисляем временной диапазон: от current_time+25 до current_time+35 минут
+    # 🔥 ВАЖНО: используем «скользящее» окно (now + [minutes_before‑10; minutes_before]),
+    # чтобы учесть сдвиги расписания запуска фоновой задачи и не пропустить события.
     now = datetime.now()
     time_from = now + timedelta(minutes=minutes_before - 10)
     time_to = now + timedelta(minutes=minutes_before)
     
     logger.info(f"Ищем события для напоминаний с {time_from} по {time_to}")
     
+    # 🔥 ВАЖНО (SQL): основной запрос использует:
+    # - LEFT JOIN с `event_assignments`, чтобы видеть только ещё не подтвердивших инженеров;
+    # - двойную проверку на отсутствие статуса `done` (поле is_completed_by_anyone и NOT EXISTS),
+    #   что защищает от гонок при одновременном завершении и рассылке напоминаний.
     rows = await pool.fetch(
         """
         SELECT 
@@ -94,8 +122,13 @@ async def find_completed_events() -> List[Dict[str, Any]]:
     ещё не отмечены как выполненные, и не завершены никем из инженеров.
     Отправляем напоминания только тем, у кого статус 'accepted' (подтвердили, но не завершили).
     
-    Returns:
-        List[Dict[str, Any]]: Список событий для отправки напоминаний о завершении
+    Возвращает:
+        Список словарей с мероприятиями, по которым нужно напомнить отметить выполнение.
+
+    Примечания:
+        🔥 ВАЖНО: выбирается окно в 15–30 минут после окончания мероприятия —
+        так инженеру даётся «подышать» после события, но напоминание всё ещё
+        приходит достаточно оперативно.
     """
     pool = get_db_pool()
     
@@ -105,6 +138,10 @@ async def find_completed_events() -> List[Dict[str, Any]]:
     
     logger.info(f"Ищем завершённые мероприятия для напоминаний с {time_from} по {time_to}")
     
+    # 🔥 ВАЖНО (SQL): в выборку попадают только:
+    # - мероприятия со статусом `confirmed`;
+    # - назначения со статусом `accepted` (инженер подтвердил, но ещё не завершил);
+    # - случаи, когда никто из инженеров не отметил выполнение (NOT EXISTS ... status = 'done').
     rows = await pool.fetch(
         """
         SELECT 
@@ -146,13 +183,15 @@ async def is_event_completed(event_id: int) -> bool:
     """
     Проверяет, завершено ли мероприятие кем-либо из инженеров.
     
-    Args:
-        event_id: ID мероприятия
-        
-    Returns:
-        bool: True если мероприятие уже завершено
+    Аргументы:
+        event_id: ID мероприятия.
+
+    Возвращает:
+        True, если хотя бы одно назначение по этому мероприятию имеет статус `done`.
     """
     pool = get_db_pool()
+    # 🔥 ВАЖНО (SQL): используем EXISTS, чтобы не загружать лишние строки —
+    # база останавливается на первом найденном завершённом назначении.
     result = await pool.fetchval(
         """
         SELECT EXISTS (
@@ -170,22 +209,27 @@ async def can_send_notification(event_id: int, user_id: int, notification_type: 
     """
     Проверяет, можно ли отправить уведомление пользователю по данному событию.
     
-    Args:
-        event_id: ID мероприятия
-        user_id: ID пользователя
-        notification_type: тип уведомления ('reminder', 'completion_reminder')
-        
-    Returns:
-        bool: True если уведомление можно отправить
+    Аргументы:
+        event_id: ID мероприятия.
+        user_id: ID пользователя (инженера).
+        notification_type: тип уведомления (см. `core.constants.NOTIFICATION_*`).
+
+    Возвращает:
+        True, если уведомление этого типа можно отправить сейчас.
+
+    Примечания:
+        🔥 ВАЖНО: функция защищает от:
+        - отправки уведомлений по уже завершённым мероприятиям;
+        - «спама» одинаковыми уведомлениями чаще одного раза в 2 часа.
     """
     pool = get_db_pool()
     
-    # Проверяем, не завершено ли мероприятие
+    # 🔍 ПРОВЕРКА 1: мероприятие уже завершено?
     if await is_event_completed(event_id):
         logger.info(f"Мероприятие {event_id} уже завершено, уведомление не требуется")
         return False
     
-    # Проверяем, не отправляли ли уже такое уведомление за последние 2 часа
+    # 🔍 ПРОВЕРКА 2: не было ли уже уведомления такого типа за последние 2 часа.
     recent = await pool.fetchval(
         """
         SELECT COUNT(*) FROM notifications 
@@ -211,9 +255,9 @@ async def send_reminder(event: Dict[str, Any], bot):
     Отправляет только если статус назначения 'assigned' (не подтверждён)
     и мероприятие ещё не завершено.
     
-    Args:
-        event: словарь с данными о событии
-        bot: экземпляр бота для отправки сообщений
+    Аргументы:
+        event: словарь с данными о событии (результат `find_upcoming_events`).
+        bot: экземпляр Telegram‑бота для отправки сообщений.
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
@@ -223,12 +267,12 @@ async def send_reminder(event: Dict[str, Any], bot):
     engineer_id = event['telegram_id']
     engineer_name = event['engineer_name'] or 'Инженер'
     
-    # 🔍 ПРОВЕРКА 1: Мероприятие ещё не завершено?
+    # 🔍 ПРОВЕРКА 1: мероприятие ещё не завершено?
     if await is_event_completed(event_id):
         logger.info(f"Мероприятие {event_id} уже завершено, напоминание не отправлено")
         return
     
-    # 🔍 ПРОВЕРКА 2: Получаем актуальный статус из БД
+    # 🔍 ПРОВЕРКА 2: получаем актуальный статус из БД, не доверяя кэшу из планировщика.
     pool = get_db_pool()
     current_status = await pool.fetchval(
         """
@@ -239,7 +283,8 @@ async def send_reminder(event: Dict[str, Any], bot):
         engineer_id
     )
     
-    # Если статус не 'assigned' — не отправляем напоминание
+    # Если статус уже не 'assigned' — значит инженер либо подтвердил,
+    # либо запросил замену, либо завершил мероприятие — напоминание не нужно.
     if current_status != ASSIGNMENT_STATUS_ASSIGNED:
         status_messages = {
             ASSIGNMENT_STATUS_ACCEPTED: f"Инженер {engineer_name} уже подтвердил участие",
@@ -250,7 +295,8 @@ async def send_reminder(event: Dict[str, Any], bot):
         logger.info(f"{message}, напоминание пропущено")
         return
     
-    # 🔍 ПРОВЕРКА 3: Можно ли отправить уведомление (защита от дублирования)
+    # 🔍 ПРОВЕРКА 3: проверяем таблицу notifications, чтобы не отправить
+    # одно и то же напоминание слишком часто.
     if not await can_send_notification(event_id, engineer_id, NOTIFICATION_REMINDER):
         return
     
@@ -301,9 +347,9 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
     Отправляет напоминание о необходимости отметить выполнение мероприятия.
     Отправляет только если статус 'accepted' и мероприятие ещё не завершено.
     
-    Args:
-        event: словарь с данными о событии
-        bot: экземпляр бота для отправки сообщений
+    Аргументы:
+        event: словарь с данными о событии (результат `find_completed_events`).
+        bot: экземпляр Telegram‑бота.
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     
@@ -313,12 +359,13 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
     engineer_id = event['telegram_id']
     engineer_name = event['engineer_name'] or 'Инженер'
     
-    # 🔍 ПРОВЕРКА 1: Мероприятие ещё не завершено?
+    # 🔍 ПРОВЕРКА 1: мероприятие ещё не завершено?
     if await is_event_completed(event_id):
         logger.info(f"Мероприятие {event_id} уже завершено, напоминание о завершении не требуется")
         return
     
-    # 🔍 ПРОВЕРКА 2: Получаем актуальный статус
+    # 🔍 ПРОВЕРКА 2: актуальный статус назначения должен быть `accepted`,
+    # иначе либо замена/отмена, либо уже выполнено.
     pool = get_db_pool()
     current_status = await pool.fetchval(
         """
@@ -334,7 +381,7 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
         logger.info(f"Мероприятие {event_id} имеет статус {current_status}, напоминание о завершении пропущено")
         return
     
-    # 🔍 ПРОВЕРКА 3: Можно ли отправить уведомление (защита от дублирования)
+    # 🔍 ПРОВЕРКА 3: доп‑проверка на частоту отправки через таблицу notifications.
     if not await can_send_notification(
         event_id,
         engineer_id,
@@ -379,7 +426,14 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
 
 
 async def log_notification(event_id: int, user_id: int, notification_type: str):
-    """Логирует отправку уведомления в таблицу notifications."""
+    """
+    Логирует факт отправки уведомления в таблицу `notifications`.
+
+    Аргументы:
+        event_id: ID мероприятия.
+        user_id: ID пользователя, которому ушло уведомление.
+        notification_type: тип уведомления (см. `core.constants`).
+    """
     pool = get_db_pool()
     await pool.execute(
         """
@@ -397,11 +451,19 @@ async def auto_complete_events() -> int:
     Автоматически отмечает как выполненные мероприятия,
     которые закончились более часа назад и не были отмечены вручную.
     
-    Returns:
-        int: количество обновлённых записей
+    Возвращает:
+        Целое число — количество обновлённых записей в `event_assignments`.
+
+    Примечания:
+        🔥 ВАЖНО: авто‑завершение распространяется на все статусы `accepted`
+        и `assigned`, чтобы «подвисшие» задачи не искажали статистику.
     """
     pool = get_db_pool()
     
+    # 🔥 ВАЖНО (SQL): внутренняя подзапрос‑фильтр выбирает события,
+    # у которых `end_time` был более часа назад; при этом не проверяется статус
+    # самих мероприятий — предполагается, что в календарь попадают только
+    # актуальные подтверждённые записи.
     result = await pool.execute(
         """
         UPDATE event_assignments 
@@ -429,7 +491,15 @@ async def auto_complete_events() -> int:
 
 async def send_morning_summary(bot):
     """
-    Отправляет утреннюю сводку о мероприятиях на сегодня.
+    Отправляет утреннюю сводку о мероприятиях на сегодня в групповой чат.
+
+    Сценарий:
+        1. Собираются все подтверждённые мероприятия на текущую дату.
+        2. Для каждого мероприятия добавляется человекочитаемое место и статус.
+        3. В конец сообщения суммируется агрегированная статистика.
+
+    Аргументы:
+        bot: экземпляр Telegram‑бота.
     """
     from config import config
     
@@ -442,6 +512,9 @@ async def send_morning_summary(bot):
     
     logger.info(f"Формируем утреннюю сводку на {today}")
     
+    # 🔥 ВАЖНО (SQL): LEFT JOIN с `event_assignments` позволяет учесть:
+    # - назначенных инженеров с различными статусами;
+    # - мероприятия без назначений (для них будет `assignment_status IS NULL`).
     rows = await pool.fetch(
         """
         SELECT 
@@ -575,7 +648,10 @@ async def send_morning_summary(bot):
 
 async def send_afternoon_report(bot):
     """
-    Отправляет дневной отчёт менеджеру о статусах мероприятий.
+    Отправляет дневной агрегированный отчёт менеджеру о статусах мероприятий.
+
+    Аргументы:
+        bot: экземпляр Telegram‑бота.
     """
     from config import config
     
@@ -587,6 +663,8 @@ async def send_afternoon_report(bot):
     today = datetime.now().date()
     
     # Получаем статистику за сегодня
+    # 🔥 ВАЖНО (SQL): используем агрегирующие SUM(CASE WHEN ...), чтобы
+    # одним запросом получить сводку по всем статусам за день.
     rows = await pool.fetch(
         """
         SELECT 
@@ -638,6 +716,8 @@ async def send_unconfirmed_report(bot):
     """
     Отправляет отчёт о неподтверждённых назначениях.
     """
-    # TODO: реализовать позже
+    # TODO(maintainer): реализовать отчёт по назначениям со статусом 'assigned'
+    # и 'replacement_requested', чтобы менеджеры могли точечно работать с рисковыми
+    # мероприятиями.
     logger.info("Отчёт о неподтверждённых будет реализован позже")
     pass

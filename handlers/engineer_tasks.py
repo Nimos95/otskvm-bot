@@ -1,4 +1,16 @@
-"""Обработчик для инженеров: мои мероприятия и задачи."""
+"""Модуль обработчиков задач инженеров.
+
+Задачи модуля:
+- показать инженеру его мероприятия на сегодня и дать выбрать конкретное мероприятие;
+- организовать двухшаговый сценарий: выбор мероприятия → выбор действия (завершить / отменить);
+- безопасно менять статусы назначений в БД с учётом нескольких инженеров на одном мероприятии;
+- уведомлять остальных инженеров и менеджеров о завершении или отмене.
+
+Используемые компоненты:
+- `database.get_db_pool` — доступ к пулу подключений PostgreSQL;
+- `utils.translit.to_cyrillic`, `utils.auditory_names.get_russian_name` — восстановление человекочитаемых названий;
+- обработчики `telegram.ext` (CallbackQueryHandler, ConversationHandler и др.) для построения диалогов Telegram.
+"""
 
 import logging
 from datetime import datetime, timedelta
@@ -26,13 +38,30 @@ CANCEL_REASON = 2
 
 async def show_my_events(message, user_id: int):
     """
-    ШАГ 1: Показывает инженеру список его мероприятий на сегодня
-    с кнопками для выбора мероприятия.
+    Шаг 1: показывает инженеру список его мероприятий на сегодня.
+
+    Аргументы:
+        message: объект сообщения Telegram, в который будет отправлен список.
+        user_id: Telegram ID инженера, чьи мероприятия нужно показать.
+
+    Возвращает:
+        None. Функция отправляет сообщение с инлайн‑кнопками, либо текст о том,
+        что мероприятий нет.
+
+    Примечания:
+        🔥 ВАЖНО: список формируется только из подтверждённых мероприятий
+        (`calendar_events.status = 'confirmed'`) и активных назначений
+        (`event_assignments.status IN ('accepted', 'assigned')`), чтобы
+        инженер не видел отменённые или уже завершённые задачи.
+
+    Пример:
+        await show_my_events(update.message, update.effective_user.id)
     """
     pool = get_db_pool()
     today = datetime.now().date()
     
-    # Получаем мероприятия инженера на сегодня
+    # 🔥 ВАЖНО: выбираем только подтверждённые мероприятия на текущую дату,
+    # привязанные к конкретному инженеру и ещё находящиеся в активном статусе.
     rows = await pool.fetch(
         """
         SELECT 
@@ -107,7 +136,25 @@ async def show_my_events(message, user_id: int):
 
 async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    ШАГ 2: Показывает действия для выбранного мероприятия.
+    Шаг 2: показывает доступные действия для выбранного мероприятия.
+
+    Сценарий:
+        1. Обработчик вызывается по нажатию на кнопку из списка мероприятий.
+        2. Из callback data извлекается ID мероприятия.
+        3. Из БД подтягиваются подробные данные и отображаются кнопки действий
+           (завершить / отменить / вернуться к списку).
+
+    Аргументы:
+        update: объект `Update` с callback‑запросом.
+        context: контекст Telegram‑бота, используется для хранения выбранного `event_id`.
+
+    Возвращает:
+        Константу состояния `SELECTING_ACTION` для `ConversationHandler`,
+        либо завершает разговор при ошибке.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: при некорректной `callback_data` (сломанный ID) пользователь
+        получит текстовое сообщение об ошибке, а состояние диалога не будет изменено.
     """
     query = update.callback_query
     await query.answer()
@@ -122,7 +169,8 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = query.from_user.id
     pool = get_db_pool()
     
-    # Получаем детальную информацию о мероприятии
+    # 🔥 ВАЖНО: жёстко ограничиваем мероприятие конкретным инженером в WHERE,
+    # чтобы инженер не смог открыть карточку чужого назначения.
     event = await pool.fetchrow(
         """
         SELECT 
@@ -207,8 +255,25 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обработчик завершения мероприятия.
-    При завершении одним инженером - автоматически завершает за всех остальных.
+    Обработчик завершения мероприятия инженером.
+
+    Бизнес‑логика:
+        🔥 ВАЖНО: если на мероприятие назначено несколько инженеров, завершение
+        одним инженером автоматически отмечает выполнение за всех остальных
+        активных назначенных инженеров. Это избавляет команду от ручного
+        дублирования действий и исключает «подвисшие» назначения.
+
+    Аргументы:
+        update: объект `Update` с callback‑запросом от инженера.
+        context: контекст Telegram‑бота, где хранится выбранный `event_id`.
+
+    Возвращает:
+        `ConversationHandler.END` по завершении операции.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: если в `context.user_data` потеряется `selected_event_id`
+        (например, пользователь нажал кнопку из старого сообщения), обработчик
+        завершит диалог и покажет сообщение об ошибке, не меняя данные в БД.
     """
     query = update.callback_query
     await query.answer()
@@ -224,7 +289,8 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
     # Начинаем транзакцию для целостности данных
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Проверяем мероприятие и получаем информацию о нём
+            # 🔥 ВАЖНО: сначала проверяем, что для текущего инженера есть
+            # активное назначение по этому мероприятию и оно подтверждено.
             event = await conn.fetchrow(
                 """
                 SELECT 
@@ -262,7 +328,7 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
                 event_id, user_id
             )
             
-            # 2. Находим ВСЕХ других инженеров, назначенных на это мероприятие
+            # 2. Находим всех других инженеров, у кого ещё активный статус по этому мероприятию.
             other_engineers = await conn.fetch(
                 """
                 SELECT 
@@ -279,7 +345,11 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
             
             other_count = len(other_engineers) if other_engineers else 0
             
-            # 3. Если есть другие инженеры - автоматически завершаем за них
+            # 🔥 ВАЖНО: автоматика по завершению за остальных инженеров.
+            # Это сделано, чтобы после фактического проведения мероприятия
+            # в отчётах не оставались «висящие» назначения, если коллеги
+            # забыли нажать кнопку завершения.
+            # 3. Если есть другие инженеры — автоматически завершаем за них.
             if other_engineers:
                 await conn.execute(
                     """
@@ -333,7 +403,8 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown"
             )
             
-            # 5. Получаем список менеджеров для уведомлений
+            # 5. Получаем список менеджеров для уведомлений, чтобы руководители
+            # видели факт завершения и состав исполнителей.
             managers = await conn.fetch(
                 "SELECT telegram_id FROM users WHERE role IN ('manager', 'superadmin')"
             )
@@ -365,7 +436,7 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception as e:
                     logger.error(f"Не удалось уведомить менеджера {manager['telegram_id']}: {e}")
     
-    # Логируем действие
+    # Логируем действие для аудита и последующей отладки.
     logger.info(
         f"Пользователь {user_id} завершил мероприятие {event_id}. "
         f"Автоматически завершено за {other_count if 'other_count' in locals() else 0} других инженеров."
@@ -391,7 +462,21 @@ def _get_engineer_word(count: int) -> str:
 
 async def event_cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Начало процесса отмены (запрос причины).
+    Начало процесса отмены мероприятия: запрашивает у инженера причину.
+
+    Сценарий:
+        1. Инженер нажимает кнопку «Отменить мероприятие».
+        2. Обработчик показывает краткую информацию о мероприятии и список
+           типовых причин с просьбой описать её текстом.
+        3. Далее управление переходит к `event_cancel_reason`.
+
+    Аргументы:
+        update: объект `Update` с callback‑запросом.
+        context: контекст Telegram‑бота с сохранённым `selected_event_id`.
+
+    Возвращает:
+        Состояние `CANCEL_REASON` для `ConversationHandler` либо `ConversationHandler.END`
+        при отсутствии выбранного мероприятия.
     """
     query = update.callback_query
     await query.answer()
@@ -401,7 +486,8 @@ async def event_cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Ошибка: не выбран ID мероприятия")
         return ConversationHandler.END
     
-    # Получаем информацию о мероприятии
+    # 🔥 ВАЖНО: в этом запросе нас интересует только заголовок,
+    # чтобы инженер мог визуально подтвердить, что отменяет нужное мероприятие.
     pool = get_db_pool()
     event = await pool.fetchrow(
         """
@@ -431,7 +517,24 @@ async def event_cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Получает причину и отменяет мероприятие.
+    Получает текст причины отмены и выполняет полную отмену мероприятия.
+
+    Бизнес‑логика:
+        - статус назначений инженера и остальных участников переводится в `cancelled`;
+        - в таблицу `cancellation_log` пишется подробная запись для последующего анализа;
+        - менеджеры получают уведомление с причиной и контекстом отмены.
+
+    Аргументы:
+        update: объект `Update` с текстовым сообщением от инженера.
+        context: контекст с выбранным `event_id`.
+
+    Возвращает:
+        `ConversationHandler.END` после успешной или неуспешной попытки отмены.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: при слишком коротком тексте причины (< 3 символов) диалог
+        не продолжается — инженеру предлагается описать причину подробнее, чтобы
+        лог был пригоден для анализа.
     """
     user_id = update.effective_user.id
     reason = update.message.text.strip()
@@ -450,7 +553,8 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
     pool = get_db_pool()
     
     try:
-        # Получаем информацию о мероприятии
+        # 🔥 ВАЖНО: в запросе объединяются данные о мероприятии, инженере и аудитории,
+        # чтобы в уведомлении менеджеру была полноценная картина (кто, где и когда отменил).
         event_info = await pool.fetchrow(
             """
             SELECT 
@@ -471,7 +575,7 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Мероприятие не найдено")
             return ConversationHandler.END
         
-        # 1. Обновляем статус
+        # 1. Обновляем статус назначений для текущего инженера.
         await pool.execute(
             """
             UPDATE event_assignments 
@@ -481,7 +585,7 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
             event_id, user_id
         )
         
-        # 2. Записываем в cancellation_log
+        # 2. Записываем событие отмены в `cancellation_log` для аудита.
         await pool.execute(
             """
             INSERT INTO cancellation_log 
@@ -491,7 +595,8 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
             event_id, user_id, 'bot', reason, False
         )
         
-        # 3. Отменяем другие назначения
+        # 3. Отменяем другие активные назначения по этому мероприятию,
+        # чтобы оно полностью исчезло из активных задач команды.
         await pool.execute(
             """
             UPDATE event_assignments 
@@ -516,7 +621,7 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             cancel_context = "после завершения"
         
-        # Уведомление менеджерам
+        # Уведомление менеджерам: даём контекст отмены и явную причину.
         manager_text = (
             f"🚨 **Мероприятие ОТМЕНЕНО**\n\n"
             f"👤 Инженер: {event_info['engineer_name']}\n"
@@ -565,25 +670,33 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return ConversationHandler.END
     
-    # Очищаем контекст
+    # После завершения процесса обязательно очищаем контекст, чтобы
+    # старый `event_id` не использовался повторно в других сценариях.
     context.user_data.pop('selected_event_id', None)
     
     return ConversationHandler.END
 
 
 async def cancel_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена действия."""
+    """Отмена текущего диалога без изменения данных в БД."""
     await update.message.reply_text("❌ Действие отменено.")
     return ConversationHandler.END
 
 async def back_to_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Возврат к списку мероприятий.
+    Возврат к списку мероприятий инженера после просмотра карточки.
+
+    Аргументы:
+        update: объект `Update` с callback‑запросом.
+        context: контекст Telegram‑бота (используется для очистки выбранного `event_id`).
+
+    Возвращает:
+        `ConversationHandler.END`, так как после возврата к списку диалог считается завершённым.
     """
     query = update.callback_query
     await query.answer()
     
-    # Просто вызываем show_my_events для текущего пользователя
+    # Просто повторно показываем список мероприятий для текущего пользователя.
     user_id = query.from_user.id
     
     # Очищаем сохранённый event_id
@@ -598,7 +711,15 @@ async def back_to_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def register_handlers(app):
     """
-    Регистрирует обработчики для engineer_tasks.
+    Регистрирует обработчики сценария задач инженера в приложении Telegram‑бота.
+
+    Аргументы:
+        app: экземпляр `Application` из `python-telegram-bot`, на который вешаются хендлеры.
+
+    Примечания:
+        🔥 ВАЖНО: порядок регистрации имеет значение. Специализированные обработчики
+        `CallbackQueryHandler` с конкретными `pattern` должны идти до более общих
+        обработчиков callback‑кнопок, иначе до них не дойдёт управление.
     """
     # Обработчик выбора мероприятия из списка
     app.add_handler(CallbackQueryHandler(event_select_handler, pattern=r'^event_select_\d+$'))

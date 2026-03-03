@@ -1,4 +1,17 @@
-"""Точка входа Telegram-бота."""
+"""Точка входа Telegram‑бота OTSKVM.
+
+Задачи модуля:
+- инициализировать пул подключений к БД и приложение Telegram‑бота;
+- зарегистрировать все обработчики команд, сообщений и callback‑кнопок
+  в правильном порядке (от более специфичных к более общим);
+- запустить фоновые циклы (синхронизация календаря, напоминания, отчёты);
+- корректно завершить работу бота и освободить ресурсы при остановке.
+
+Используемые компоненты:
+- `telegram.ext.Application` и хендлеры команд/сообщений;
+- инфраструктурные модули `database`, `services.reminder`, `services.sync_scheduler`;
+- обработчики из `handlers.*` для прикладной логики.
+"""
 
 import asyncio
 import logging
@@ -49,7 +62,18 @@ async def new_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def reminder_loop(application: Application):
-    """Бесконечный цикл проверки событий."""
+    """
+    Бесконечный цикл проверки событий для отправки напоминаний и авто‑завершения.
+
+    Сценарий:
+        1. Периодически ищет предстоящие мероприятия и отправляет напоминания.
+        2. Ищет завершившиеся мероприятия и напоминает инженерам отметить выполнение.
+        3. Автоматически завершает «подвисшие» мероприятия по истечении времени.
+
+    Примечания:
+        🔥 ВАЖНО: цикл обёрнут в try/except, чтобы единичные ошибки в БД или сети
+        не останавливали фоновую задачу. Между итерациями выдерживается пауза 5 минут.
+    """
     while True:
         try:
             # 1. Напоминания о предстоящих событиях
@@ -79,8 +103,16 @@ async def reminder_loop(application: Application):
 
 async def morning_summary_loop(application: Application):
     """
-    Цикл для утренней сводки.
-    Запускается в 9:00 каждый день.
+    Фоновый цикл отправки утренней сводки в 9:00 каждый день.
+
+    Логика:
+        - вычисляет ближайшее время запуска (сдвигает на следующий день, если время ушло);
+        - спит до нужного момента;
+        - вызывает `services.reminder.send_morning_summary`.
+
+    Примечания:
+        ⚠️ ВНИМАНИЕ: цикл не использует cron, поэтому при долгих остановках
+        бота сводка может прийти позже 9:00, но сам механизм сохраняется простым.
     """
     while True:
         try:
@@ -105,8 +137,10 @@ async def morning_summary_loop(application: Application):
 
 async def afternoon_report_loop(application: Application):
     """
-    Цикл для дневного отчёта менеджеру.
-    Запускается в 14:00 каждый день.
+    Фоновый цикл отправки дневного отчёта менеджеру в 14:00 каждый день.
+
+    Логика аналогична `morning_summary_loop`, но использует функцию
+    `services.reminder.send_afternoon_report`.
     """
     while True:
         try:
@@ -131,7 +165,14 @@ async def afternoon_report_loop(application: Application):
 
 async def main() -> None:
     """
-    Главная асинхронная функция.
+    Главная асинхронная функция запуска бота.
+
+    Этапы:
+        1. Инициализация пула БД (без него остальные модули работать не смогут).
+        2. Создание приложения Telegram‑бота.
+        3. Регистрация всех обработчиков и запуск фоновых циклов.
+        4. Запуск polling‑механизма и удержание процесса в рабочем состоянии.
+        5. Корректная остановка приложения и закрытие пула БД.
     """
     # Инициализация пула БД
     try:
@@ -141,14 +182,16 @@ async def main() -> None:
         logger.critical("Ошибка инициализации БД: %s", e, exc_info=True)
         return
 
-    # Создание приложения бота
+    # Создание приложения бота (основной объект, на который вешаются все хендлеры).
     application = Application.builder().token(config.BOT_TOKEN).build()
 
     # ============================================
     # РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ (ВАЖЕН ПОРЯДОК!)
     # ============================================
 
-    # 1. Команды (самый высокий приоритет)
+    # 1. Команды (самый высокий приоритет).
+   # 🔥 ВАЖНО: команды обрабатываются раньше обычных сообщений, поэтому их
+    # регистрация должна выполняться до `MessageHandler` с фильтром TEXT.
     application.add_handler(CommandHandler("start", start.start_handler))
     application.add_handler(CommandHandler("cancel", start.cancel_handler))
     application.add_handler(CommandHandler("status", status.status_handler))
@@ -156,7 +199,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("assign", assign_handler))
     application.add_handler(CommandHandler("setrole", manage_roles_handler))
     
-    # 1.5 СПЕЦИФИЧНЫЕ CallbackHandler'ы (с конкретными pattern)
+    # 1.5 Специфичные CallbackHandler'ы (с конкретными pattern).
     # Регистрация обработчиков engineer_tasks (отмена и завершение мероприятий)
     register_engineer_tasks(application)
     logger.info("Обработчики engineer_tasks зарегистрированы")
@@ -166,10 +209,12 @@ async def main() -> None:
         application.add_handler(CallbackQueryHandler(handler, pattern=f"^{pattern}$"))
     logger.info(f"Обработчики админ-панели зарегистрированы: {len(admin_callbacks)} шт.")
     
-    # 2. Общий обработчик inline-кнопок (для всех остальных callback)
+    # 2. Общий обработчик inline‑кнопок (для всех остальных callback).
+    # ⚠️ ВНИМАНИЕ: этот хендлер должен регистрироваться после всех точечных
+    # `CallbackQueryHandler` с pattern, иначе будет «перехватывать» их события.
     application.add_handler(CallbackQueryHandler(callback_handler))
     
-    # 3. Постоянное меню (текстовые кнопки)
+    # 3. Постоянное меню (текстовые кнопки) — обычные сообщения с фиксированным текстом.
     application.add_handler(MessageHandler(
         filters.Text(["📋 Аудитории", "📅 Расписание", "👥 Назначения", 
                   "❓ Помощь", "📋 Мои мероприятия", "🛠 Админ-панель",
@@ -177,10 +222,10 @@ async def main() -> None:
         menu_button_handler
     ))
     
-    # 4. Общий обработчик текстовых сообщений
+    # 4. Общий обработчик текстовых сообщений — самый широкий фильтр.
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    # 5. Обработчик новых участников
+    # 5. Обработчик изменения статуса бота в чате (например, добавление в группу).
     application.add_handler(ChatMemberHandler(
         new_chat_member_handler, 
         ChatMemberHandler.MY_CHAT_MEMBER
@@ -190,19 +235,19 @@ async def main() -> None:
     # ЗАПУСК ФОНОВЫХ ЗАДАЧ
     # ============================================
     
-    # Синхронизация календаря (каждые 6 часов)
+    # Синхронизация календаря (каждые 6 часов).
     asyncio.create_task(sync_loop())
     logger.info("Фоновая синхронизация календаря запущена")
     
-    # Напоминания о мероприятиях (каждые 5 минут)
+    # Напоминания о мероприятиях (каждые 5 минут).
     asyncio.create_task(reminder_loop(application))
     logger.info("Фоновая проверка напоминаний запущена")
     
-    # Утренняя сводка (в 9:00)
+    # Утренняя сводка (в 9:00).
     asyncio.create_task(morning_summary_loop(application))
     logger.info("Планировщик утренней сводки запущен")
     
-    # Дневной отчёт (в 14:00)
+    # Дневной отчёт (в 14:00).
     asyncio.create_task(afternoon_report_loop(application))
     logger.info("Планировщик дневного отчёта запущен")
 

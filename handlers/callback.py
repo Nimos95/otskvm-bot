@@ -1,4 +1,12 @@
-"""Обработчик inline-кнопок."""
+"""Центральный обработчик inline‑кнопок и вспомогательные сценарии.
+
+Задачи модуля:
+- маршрутизировать все callback‑запросы от inline‑кнопок по строковому `data`;
+- вызывать специализированные обработчики из других модулей (аудитории, расписание,
+  назначения, помощь, админ‑панель);
+- реализовывать сценарии подтверждения участия, запроса замены и завершения мероприятий
+  со стороны инженеров.
+"""
 
 import logging
 import cyrtranslit
@@ -48,7 +56,25 @@ logger = logging.getLogger(__name__)
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает нажатия на inline-кнопки."""
+    """
+    Обрабатывает нажатия на inline‑кнопки (callback‑запросы).
+
+    Сценарий:
+        1. Считывает `callback_query.data` и определяет тип действия.
+        2. В зависимости от префикса/значения `data` вызывает конкретный хендлер
+           (аудитории, расписание, помощь, назначения, подтверждение и т.д.).
+        3. Ведёт учёт активности пользователя через `Database.update_user_last_active`.
+
+    Аргументы:
+        update: объект `Update` с callback‑запросом.
+        context: контекст Telegram‑бота.
+
+    Примечания:
+        🔥 ВАЖНО: порядок `elif`‑веток имеет значение — более специфичные префиксы
+        (например, `engineer_complete_`) должны идти до более общих, чтобы не
+        перехватываться чужой логикой. При добавлении новых кнопок следите за
+        уникальностью префиксов.
+    """
     query = update.callback_query
     await query.answer()
     
@@ -194,11 +220,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def confirm_assignment(query, user_id, event_id, context):
-    """Подтверждение участия в мероприятии."""
+    """
+    Подтверждение инженером участия в мероприятии из уведомления.
+
+    Аргументы:
+        query: `CallbackQuery` с нажатием на кнопку.
+        user_id: Telegram ID инженера.
+        event_id: ID мероприятия.
+        context: контекст Telegram‑бота (используется для уведомления менеджера).
+
+    Примечания:
+        🔥 ВАЖНО: после обновления статуса в `event_assignments` создаётся
+        запись в таблице `notifications`, а менеджер получает отдельное
+        уведомление в групповой чат.
+    """
     pool = get_db_pool()
     
     try:
-        # Обновляем статус
+        # 🔥 ВАЖНО (SQL): обновляем только запись конкретного инженера по event_id,
+        # выставляя статус 'accepted' и фиксируя момент подтверждения.
         result = await pool.execute(
             """
             UPDATE event_assignments 
@@ -212,7 +252,7 @@ async def confirm_assignment(query, user_id, event_id, context):
         # Логируем
         await log_notification(event_id, user_id, 'confirmation')
         
-        # Получаем информацию о мероприятии для уведомления менеджера
+        # Получаем информацию о мероприятии для уведомления менеджера.
         event_info = await pool.fetchrow(
             """
             SELECT 
@@ -243,11 +283,24 @@ async def confirm_assignment(query, user_id, event_id, context):
 
 
 async def request_replacement(query, user_id, event_id, context):
-    """Запрос замены на мероприятие."""
+    """
+    Запрос инженера на замену по мероприятию.
+
+    Аргументы:
+        query: `CallbackQuery` с нажатием на кнопку «Ищу замену».
+        user_id: Telegram ID инженера.
+        event_id: ID мероприятия.
+        context: контекст Telegram‑бота.
+
+    Примечания:
+        🔥 ВАЖНО: статус назначения переводится в `replacement_requested`,
+        а менеджеру уходит уведомление с кнопкой для быстрого перехода
+        в список назначений и поиска замены.
+    """
     pool = get_db_pool()
     
     try:
-        # Получаем информацию для уведомления с транслитерацией
+        # Получаем информацию о мероприятии и инженере для уведомления менеджера.
         event_info = await pool.fetchrow(
             """
             SELECT 
@@ -269,7 +322,8 @@ async def request_replacement(query, user_id, event_id, context):
             event_info = dict(event_info)
             event_info['title'] = russian_title
         
-        # Меняем статус на 'replacement_requested'
+        # Меняем статус на 'replacement_requested', чтобы в аналитике и интерфейсе
+        # было видно, что по мероприятию требуется замена.
         await pool.execute(
             """
             UPDATE event_assignments 
@@ -296,7 +350,14 @@ async def request_replacement(query, user_id, event_id, context):
 
 
 async def notify_manager_about_confirmation(event_info, user_id, context):
-    """Уведомляет менеджера о подтверждении инженера."""
+    """
+    Уведомляет менеджера о том, что инженер подтвердил участие.
+
+    Аргументы:
+        event_info: данные о мероприятии (title, start_time, engineer_name).
+        user_id: Telegram ID инженера.
+        context: контекст Telegram‑бота.
+    """
     from config import config
     import cyrtranslit
     
@@ -325,7 +386,14 @@ async def notify_manager_about_confirmation(event_info, user_id, context):
 
 
 async def notify_manager_about_replacement(event_info, user_id, context):
-    """Уведомляет менеджера о запросе замены."""
+    """
+    Уведомляет менеджера о запросе замены инженера.
+
+    Аргументы:
+        event_info: данные о мероприятии.
+        user_id: Telegram ID инженера.
+        context: контекст Telegram‑бота.
+    """
     from config import config
     import cyrtranslit
     
@@ -359,11 +427,23 @@ async def notify_manager_about_replacement(event_info, user_id, context):
     )
 
 async def complete_event_manually(query, user_id, event_id, context):
-    """Ручное завершение мероприятия инженером."""
+    """
+    Ручное завершение мероприятия инженером через кнопку в напоминании.
+
+    Аргументы:
+        query: `CallbackQuery` с нажатием на кнопку завершения.
+        user_id: Telegram ID инженера.
+        event_id: ID мероприятия.
+        context: контекст Telegram‑бота.
+
+    Примечания:
+        🔥 ВАЖНО: перед изменением статуса проверяется, что инженер действительно
+        назначен на мероприятие, чтобы исключить чужие нажатия.
+    """
     pool = get_db_pool()
     
     try:
-        # Проверяем, что инженер действительно назначен на это мероприятие
+        # Проверяем, что инженер действительно назначен на это мероприятие.
         assignment = await pool.fetchrow(
             """
             SELECT status FROM event_assignments 
@@ -377,7 +457,7 @@ async def complete_event_manually(query, user_id, event_id, context):
             await query.answer("❌ Вы не назначены на это мероприятие", show_alert=True)
             return
         
-        # Обновляем статус
+        # Обновляем статус назначения на 'done' и фиксируем время завершения.
         await pool.execute(
             """
             UPDATE event_assignments 
@@ -405,7 +485,14 @@ async def complete_event_manually(query, user_id, event_id, context):
         await query.answer("❌ Произошла ошибка")
 
 async def notify_manager_about_completion(event_id, user_id, context):
-    """Уведомляет менеджера о завершении мероприятия."""
+    """
+    Уведомляет менеджера о том, что инженер завершил мероприятие.
+
+    Аргументы:
+        event_id: ID мероприятия.
+        user_id: Telegram ID инженера.
+        context: контекст Telegram‑бота.
+    """
     from config import config
     
     if not config.GROUP_CHAT_ID:
@@ -449,7 +536,7 @@ async def notify_manager_about_completion(event_id, user_id, context):
 
 
 async def show_main_menu(query):
-    """Показывает главное меню."""
+    """Показывает простое inline‑меню (исторический интерфейс до постоянного меню)."""
     keyboard = [
         [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
         [InlineKeyboardButton("📅 Расписание", callback_data="schedule_menu")],
@@ -464,7 +551,7 @@ async def show_main_menu(query):
 
 
 async def show_help(query):
-    """Показывает справку."""
+    """Показывает краткую справку по командам и статусам (старый интерфейс помощи)."""
     keyboard = [
         [InlineKeyboardButton("📋 Список аудиторий", callback_data="list_auditories")],
         [InlineKeyboardButton("« Главное меню", callback_data="back_to_main")]
@@ -486,7 +573,7 @@ async def show_help(query):
 
 
 async def show_schedule_menu(query):
-    """Показывает меню расписания."""
+    """Показывает inline‑меню с выбором периода расписания (сегодня/завтра/неделя)."""
     keyboard = [
         [InlineKeyboardButton("📅 Сегодня", callback_data="today_schedule")],
         [InlineKeyboardButton("📆 Завтра", callback_data="tomorrow_schedule")],
@@ -504,7 +591,7 @@ async def show_schedule_menu(query):
 
 
 async def show_today_schedule_calendar(query):
-    """Показывает расписание на сегодня."""
+    """Показывает расписание мероприятий на сегодня (через inline‑сообщение)."""
     from handlers.today import get_events_for_date
     
     today = datetime.now().date()
@@ -557,7 +644,7 @@ async def show_today_schedule_calendar(query):
 
 
 async def show_tomorrow_schedule_calendar(query):
-    """Показывает расписание на завтра."""
+    """Показывает расписание мероприятий на завтра (через inline‑сообщение)."""
     from handlers.today import get_events_for_date
     
     tomorrow = datetime.now().date() + timedelta(days=1)
@@ -611,7 +698,7 @@ async def show_tomorrow_schedule_calendar(query):
 
 
 async def show_week_schedule_calendar(query):
-    """Показывает расписание на неделю."""
+    """Показывает расписание мероприятий на неделю (через inline‑сообщение)."""
     from handlers.today import get_events_for_date
     
     today = datetime.now().date()
@@ -676,7 +763,13 @@ async def show_week_schedule_calendar(query):
 
 
 async def show_auditories(query):
-    """Показывает список аудиторий с русскими названиями на кнопках."""
+    """
+    Показывает список активных аудиторий с русскими названиями на кнопках.
+
+    Примечания:
+        🔥 ВАЖНО: кнопки разносятся по две в строке для более компактного отображения
+        и лучшей читаемости в Telegram‑клиенте.
+    """
     rows = await get_active_auditories()
 
     if not rows:
@@ -706,7 +799,19 @@ async def show_auditories(query):
 
 
 async def show_status_buttons(query, auditory_id, context):
-    """Показывает кнопки выбора статуса и текущее состояние аудитории."""
+    """
+    Показывает кнопки выбора статуса и текущее состояние аудитории.
+
+    Аргументы:
+        query: `CallbackQuery`, по которому будет отредактировано сообщение.
+        auditory_id: ID аудитории.
+        context: контекст бота (нужен для последующих действий).
+
+    Примечания:
+        🔥 ВАЖНО: при повторной установке того же статуса Telegram может вернуть
+        ошибку «Message is not modified» — она перехватывается, и пользователю
+        показывается понятное уведомление.
+    """
     name = await get_auditory_name_by_id(int(auditory_id))
     if not name:
         await query.edit_message_text("Аудитория не найдена")
@@ -758,7 +863,22 @@ async def show_status_buttons(query, auditory_id, context):
 
 
 async def set_status_from_button(query, context, user_id, auditory_id, status, comment):
-    """Устанавливает статус через кнопку."""
+    """
+    Устанавливает статус аудитории по нажатию inline‑кнопки.
+
+    Аргументы:
+        query: `CallbackQuery` от пользователя.
+        context: контекст бота (для отправки уведомлений в топик).
+        user_id: Telegram ID пользователя.
+        auditory_id: ID аудитории.
+        status: новый статус ('green', 'yellow', 'red').
+        comment: комментарий к статусу (для yellow/red).
+
+    Примечания:
+        🔥 ВАЖНО: помимо записи в `status_log` функция отправляет уведомление
+        в групповой топик, если он настроен в `config`, обеспечивая прозрачность
+        для команды.
+    """
     pool = get_db_pool()
     row = await pool.fetchrow("SELECT name FROM auditories WHERE id = $1", int(auditory_id))
     if not row:
@@ -807,7 +927,12 @@ async def set_status_from_button(query, context, user_id, auditory_id, status, c
 
 async def engineer_complete_handler(query, user_id, event_id, context):
     """
-    Обработчик досрочного завершения из списка мероприятий инженера.
+    Обработчик досрочного завершения мероприятия из списка «Мои мероприятия».
+
+    Сценарий:
+        - вызывается по нажатию на кнопку «досрочно завершить» в интерфейсе инженера;
+        - проверяет назначение и меняет статус на 'done';
+        - отправляет уведомление менеджеру о досрочном завершении.
     """
     pool = get_db_pool()
     
@@ -857,7 +982,14 @@ async def engineer_complete_handler(query, user_id, event_id, context):
 
 
 async def notify_manager_about_early_completion(event_id, user_id, context):
-    """Уведомляет менеджера о досрочном завершении."""
+    """
+    Уведомляет менеджера о досрочном завершении мероприятия инженером.
+
+    Аргументы:
+        event_id: ID мероприятия.
+        user_id: Telegram ID инженера.
+        context: контекст Telegram‑бота.
+    """
     from config import config
     
     if not config.GROUP_CHAT_ID:

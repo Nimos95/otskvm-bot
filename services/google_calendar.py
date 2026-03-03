@@ -21,7 +21,20 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
 class GoogleCalendarClient:
-    """Клиент для работы с Google Calendar API."""
+    """
+    Клиент для работы с Google Calendar API.
+
+    Задачи:
+        - аутентификация через OAuth 2.0 и хранение токена в `token.json`;
+        - загрузка событий из указанного календаря на заданный период;
+        - сохранение/обновление событий в таблице `calendar_events` с
+          транслитерацией названий и попыткой привязать аудитории.
+
+    Примечания:
+        🔥 ВАЖНО: при изменении структуры таблицы `calendar_events` необходимо
+        синхронизировать поля в методе `save_events_to_db`, иначе часть данных
+        не будет сохраняться.
+    """
     
     def __init__(self):
         self.service = None
@@ -102,7 +115,20 @@ class GoogleCalendarClient:
         return None
     
     async def save_events_to_db(self, events: List[Dict[str, Any]]):
-        """Сохраняет события в базу данных."""
+        """
+        Сохраняет полученные из Google Calendar события в базу данных.
+
+        Аргументы:
+            events: список событий, полученный из `fetch_events`.
+
+        Примечания:
+            🔥 ВАЖНО:
+            - названия мероприятий и аудиторий транслитерируются в латиницу
+              (`to_latin`), чтобы хранить единый формат в БД;
+            - используется `INSERT ... ON CONFLICT (google_event_id) DO UPDATE`,
+              что позволяет повторно синхронизировать уже существующие события
+              без дублирования записей.
+        """
         pool = get_db_pool()
         saved_count = 0
         
@@ -151,7 +177,10 @@ class GoogleCalendarClient:
                         auditory_id = row["id"]
                         logger.debug(f"Найдена аудитория {auditory_name} (ID: {auditory_id})")
                 
-                # Вставляем или обновляем событие
+                # Вставляем или обновляем событие в таблицу calendar_events.
+                # 🔥 ВАЖНО (SQL): ключом уникальности является `google_event_id`,
+                # поэтому если событие было изменено в календаре, оно будет
+                # корректно обновлено при следующей синхронизации.
                 await pool.execute(
                     """
                     INSERT INTO calendar_events 

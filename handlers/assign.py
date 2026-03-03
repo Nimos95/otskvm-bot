@@ -1,4 +1,19 @@
-"""Обработчик назначения ответственных на мероприятия."""
+"""Обработчики назначения ответственных инженеров на мероприятия.
+
+Задачи модуля:
+- дать менеджеру удобный интерфейс выбора мероприятия из ближайшего диапазона дат;
+- позволить назначать одного или нескольких инженеров на мероприятие;
+- отправлять инженерам уведомления с кнопками подтверждения/отказа;
+- отображать текущие статусы назначений (назначен, подтвердил, выполнил и т.д.).
+
+Используемые компоненты:
+- `config.config` — настройки диапазона дат и другие параметры;
+- `database.get_db_pool` — пул подключений к PostgreSQL;
+- `utils.roles.require_roles` — ограничение доступа к хендлерам только для менеджеров;
+- `utils.auditory_names.get_russian_name`, `utils.translit.to_cyrillic` — человекочитаемые
+  названия мероприятий и аудиторий;
+- объекты `telegram`/`telegram.ext` для построения клавиатур и обработки callback‑запросов.
+"""
 
 import logging
 from datetime import datetime, timedelta 
@@ -19,8 +34,27 @@ logger = logging.getLogger(__name__)
 @require_roles(['superadmin', 'manager'])
 async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обработчик команды /assign и кнопки "Назначения".
-    Показывает список мероприятий для назначения ответственных.
+    Обработчик команды `/assign` и кнопки «Назначения».
+
+    Сценарий:
+        1. Менеджер вызывает команду или нажимает кнопку в меню.
+        2. Бот запрашивает из БД мероприятия на ближайший диапазон дат
+           (по умолчанию 5 дней, настраивается `ASSIGN_DAYS_RANGE`).
+        3. Формируется список мероприятий с инлайн‑кнопками для перехода к выбору
+           инженера.
+
+    Аргументы:
+        update: объект `Update` с командой или сообщением кнопки.
+        context: контекст Telegram‑бота (в этом хендлере почти не используется).
+
+    Возвращает:
+        None. Отправляет сообщение с инлайн‑клавиатурой или текст об отсутствии
+        мероприятий.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: если `update.message` отсутствует (например, callback),
+        хендлер просто завершится без действия — это защита от некорректного
+        вызова.
     """
     if not update.message:
         return
@@ -28,7 +62,7 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} вызвал /assign")
     
-    # Получаем мероприятия на ближайшие 5 дней
+    # Получаем мероприятия на ближайший диапазон дней из конфига.
     pool = get_db_pool()
     today = datetime.now().date()
     
@@ -38,7 +72,8 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Ищем мероприятия на даты: {dates}")
     
-    # Формируем запрос с динамическим количеством параметров
+    # 🔥 ВАЖНО: используем плейсхолдеры `$1..$N`, а не подстановку дат в строку,
+    # чтобы избежать SQL‑инъекций и сохранить кросс‑совместимость с asyncpg.
     placeholders = ','.join([f'${i+1}' for i in range(len(dates))])
     
     rows = await pool.fetch(
@@ -114,11 +149,30 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_engineers_for_event(query, event_id):
     """
-    Показывает список инженеров для назначения на мероприятие.
+    Показывает список инженеров для назначения на выбранное мероприятие.
+
+    Сценарий:
+        1. Менеджер выбирает мероприятие из списка.
+        2. Хендлер выводит всех инженеров/менеджеров/суперадминов с их текущим
+           статусом назначения по данному событию.
+        3. Нажатие на инженера приводит к назначению / переотправке уведомления.
+
+    Аргументы:
+        query: объект `CallbackQuery`, с помощью которого редактируется сообщение.
+        event_id: ID мероприятия в таблице `calendar_events`.
+
+    Возвращает:
+        None. Редактирует существующее сообщение с новой клавиатурой.
+
+    Примечания:
+        🔥 ВАЖНО: в запросе используется `LEFT JOIN` с `event_assignments`,
+        чтобы в интерфейсе отображались как уже назначенные, так и ещё не
+        назначенные инженеры.
     """
     pool = get_db_pool()
     
-    # Получаем информацию о мероприятии
+    # 🔥 ВАЖНО: фильтруем только будущие мероприятия (`start_time > NOW()`),
+    # чтобы не позволить назначать инженеров на прошедшие события.
     event_row = await pool.fetchrow(
         """
         SELECT 
@@ -138,7 +192,7 @@ async def show_engineers_for_event(query, event_id):
         await query.edit_message_text("Мероприятие не найдено")
         return
     
-    # Получаем список инженеров (кто уже назначен — показываем отдельно)
+    # Получаем список инженеров и статусы их назначений по данному событию.
     engineers = await pool.fetch(
         """
         SELECT 
@@ -222,11 +276,30 @@ async def show_engineers_for_event(query, event_id):
 
 async def assign_engineer_to_event(query, context, user_id, event_id, engineer_id):
     """
-    Назначает инженера на мероприятие.
+    Назначает одного инженера на мероприятие.
+
+    Сценарий:
+        1. Менеджер выбирает инженера в списке.
+        2. Проверяем, что событие ещё не началось и имеет статус `confirmed`.
+        3. Проверяем, что инженер ещё не назначен.
+        4. Создаём запись в `event_assignments` и отправляем инженеру уведомление
+           с кнопками «Принять» / «Отказаться».
+
+    Аргументы:
+        query: `CallbackQuery`, через который показываем всплывающие уведомления.
+        context: контекст Telegram‑бота, нужен для отправки сообщений инженеру.
+        user_id: Telegram ID менеджера, который делает назначение.
+        event_id: ID мероприятия в таблице `calendar_events`.
+        engineer_id: Telegram ID назначаемого инженера.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: если мероприятие уже в прошлом или не подтверждено,
+        назначение блокируется, а менеджер получает всплывающее сообщение.
     """
     pool = get_db_pool()
 
-    # Проверяем, что мероприятие ещё актуально
+    # 🔥 ВАЖНО: дополнительная проверка, что мероприятие ещё не началось
+    # и всё ещё подтверждено. Это защита от "застывших" кнопок в старых сообщениях.
     event = await pool.fetchrow(
         """
         SELECT start_time FROM calendar_events 
@@ -239,7 +312,7 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
         await query.answer("❌ Нельзя назначить на прошедшее мероприятие", show_alert=True)
         return
     
-    # Проверяем, не назначен ли уже
+    # Проверяем, не назначен ли уже данный инженер на это мероприятие.
     existing = await pool.fetchrow(
         "SELECT id, status FROM event_assignments WHERE event_id = $1 AND assigned_to = $2",
         int(event_id),
@@ -252,7 +325,7 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
         await show_engineers_for_event(query, event_id)
         return
     
-    # Назначаем инженера
+    # Вставляем новое назначение в таблицу event_assignments.
     await pool.execute(
         """
         INSERT INTO event_assignments 
@@ -313,7 +386,19 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
 
 async def accept_assignment(query, user_id, event_id):
     """
-    Инженер принимает назначение.
+    Инженер принимает назначение на мероприятие.
+
+    Аргументы:
+        query: `CallbackQuery` от инженера.
+        user_id: Telegram ID инженера.
+        event_id: ID мероприятия.
+
+    Возвращает:
+        None. Обновляет статус в БД и редактирует сообщение с подтверждением.
+
+    Примечания:
+        🔥 ВАЖНО: статус меняется на `accepted`, а время подтверждения фиксируется
+        в поле `confirmed_at`, чтобы по логам можно было понять скорость реакции.
     """
     pool = get_db_pool()
     
@@ -334,13 +419,23 @@ async def accept_assignment(query, user_id, event_id):
 
 async def show_assign_list(query, context):
     """
-    Показывает список мероприятий для назначения (возврат из callback).
+    Показывает список мероприятий для назначения (вариант из callback).
+
+    Сценарий:
+        Используется при навигации назад из вложенных экранов (список инженеров,
+        мульти‑назначение). По сути повторяет логику `assign_handler`, но
+        редактирует существующее сообщение вместо отправки нового.
+
+    Аргументы:
+        query: `CallbackQuery`, по которому редактируется сообщение.
+        context: контекст бота (используется только для совместимости интерфейса).
     """
-    # Получаем pool для запросов к БД
+    # Получаем пул для запросов к БД.
     pool = get_db_pool()
     today = datetime.now().date()
     
-    # Получаем те же данные, что и в assign_handler
+    # Получаем те же данные, что и в assign_handler, чтобы интерфейсы
+    # из команды и из callback выглядели одинаково.
     days_range = getattr(config, 'ASSIGN_DAYS_RANGE', 5)
     dates = [today + timedelta(days=i) for i in range(days_range)]
     
@@ -408,7 +503,18 @@ async def show_assign_list(query, context):
 
 async def decline_assignment(query, user_id, event_id):
     """
-    Инженер отказывается от назначения.
+    Инженер отказывается от участия в мероприятии.
+
+    Аргументы:
+        query: `CallbackQuery` от инженера.
+        user_id: Telegram ID инженера.
+        event_id: ID мероприятия.
+
+    Примечания:
+        ⚠️ ВНИМАНИЕ: текущее назначение полностью удаляется из `event_assignments`.
+        Это означает, что история отказа сохраняется только в логах бота,
+        а не в БД. Если в будущем понадобится аналитика отказов, потребуется
+        отдельная таблица/поле.
     """
     pool = get_db_pool()
     
@@ -427,10 +533,28 @@ async def decline_assignment(query, user_id, event_id):
 async def show_multi_assign(query, context, event_id):
     """
     Показывает интерфейс для назначения нескольких инженеров на мероприятие.
+
+    Сценарий:
+        1. Менеджер выбирает режим «Назначить нескольких».
+        2. Отображается список инженеров, где по клику инженер попадает
+           во временный список `selected_engineers_*`.
+        3. После выбора нескольких инженеров менеджер подтверждает массовое
+           назначение.
+
+    Аргументы:
+        query: `CallbackQuery`, по которому редактируется сообщение.
+        context: контекст Telegram‑бота, хранит временный набор выбранных инженеров.
+        event_id: ID мероприятия.
+
+    Примечания:
+        🔥 ВАЖНО: выбранные инженеры хранятся в `context.user_data` как `set`.
+        Это удобно для переключения выбора, но такие данные не должны
+        сериализоваться в persistent‑storage — здесь контекст используется
+        только в рамках текущей сессии менеджера.
     """
     pool = get_db_pool()
     
-    # Получаем информацию о мероприятии
+    # Получаем информацию о мероприятии, чтобы показать её в заголовке экрана.
     event_row = await pool.fetchrow(
         """
         SELECT 
@@ -449,7 +573,7 @@ async def show_multi_assign(query, context, event_id):
         await query.edit_message_text("Мероприятие не найдено")
         return
     
-    # Получаем список инженеров
+    # Получаем список инженеров с их текущими статусами по этому событию.
     engineers = await pool.fetch(
         """
         SELECT 
@@ -488,7 +612,9 @@ async def show_multi_assign(query, context, event_id):
         f"_(нажмите на инженера, чтобы выбрать/снять выбор)_\n\n"
     )
     
-    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    # 🔥 ВАЖНО: используем `context.user_data` как хранилище состояния выбора
+    # для конкретного `event_id`, чтобы одно и то же сообщение корректно
+    # отображало выбранных инженеров при каждом обновлении.
     key = f"selected_engineers_{event_id}"
     selected = context.user_data.get(key, set())
     
@@ -540,9 +666,21 @@ async def show_multi_assign(query, context, event_id):
 
 async def multi_toggle_handler(query, context, user_id, event_id, engineer_id):
     """
-    Добавляет/удаляет инженера из списка выбранных.
+    Добавляет или удаляет инженера из временного списка выбранных.
+
+    Аргументы:
+        query: `CallbackQuery` с нажатием на конкретного инженера.
+        context: контекст Telegram‑бота.
+        user_id: Telegram ID менеджера (сейчас не используется, но оставлен для расширения).
+        event_id: ID мероприятия.
+        engineer_id: Telegram ID инженера, которого включаем/исключаем.
+
+    Примечания:
+        ⚠️ ВНИМАНИЕ: так как состояние хранится в памяти процесса бота, при
+        его перезапуске выбор будет потерян — это осознанный компромисс,
+        чтобы не усложнять схему хранения.
     """
-    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    # 🔥 ИСПОЛЬЗОВАНИЕ context.user_data: создаём отдельный set под конкретное событие.
     key = f"selected_engineers_{event_id}"
     
     if key not in context.user_data:
@@ -561,9 +699,24 @@ async def multi_toggle_handler(query, context, user_id, event_id, engineer_id):
 
 async def multi_confirm_handler(query, context, user_id, event_id):
     """
-    Подтверждает назначение всех выбранных инженеров.
+    Подтверждает назначение всех ранее выбранных инженеров.
+
+    Аргументы:
+        query: `CallbackQuery` от менеджера при нажатии кнопки подтверждения.
+        context: контекст Telegram‑бота с набором выбранных инженеров.
+        user_id: Telegram ID менеджера, назначающего инженеров.
+        event_id: ID мероприятия.
+
+    Возвращает:
+        None. Создаёт записи в `event_assignments`, отправляет уведомления и
+        обновляет интерфейс выбора инженеров.
+
+    Примечания:
+        🔥 ВАЖНО: для каждого инженера дополнительно проверяется отсутствие
+        существующего назначения, чтобы избежать дублей при повторном нажатии.
     """
-    # 🔥 ИСПРАВЛЕНИЕ: используем context.user_data
+    # 🔥 ВАЖНО: используем `context.user_data` как источник временного списка
+    # выбранных инженеров для данного события.
     key = f"selected_engineers_{event_id}"
     selected = context.user_data.get(key, set())
     
@@ -604,7 +757,8 @@ async def multi_confirm_handler(query, context, user_id, event_id):
         
         success_count += 1
     
-    # Очищаем выбранных
+    # После подтверждения очищаем выбранных, чтобы при следующем заходе
+    # менеджер не увидел «старый» выбор.
     context.user_data.pop(key, None)
     
     await query.answer(f"✅ Назначено: {success_count}, уже были назначены: {already_count}")
@@ -615,7 +769,17 @@ async def multi_confirm_handler(query, context, user_id, event_id):
 
 async def send_assignment_notification(context, event_id, engineer_id):
     """
-    Отправляет уведомление назначенному инженеру.
+    Отправляет уведомление о назначении инженеру.
+
+    Аргументы:
+        context: контекст Telegram‑бота с доступом к `bot`.
+        event_id: ID мероприятия.
+        engineer_id: Telegram ID инженера.
+
+    Примечания:
+        🔥 ВАЖНО: текст уведомления и клавиатура продублированы с одиночным
+        назначением (`assign_engineer_to_event`), чтобы поведение было
+        одинаковым независимо от того, назначен инженер один или в группе.
     """
     pool = get_db_pool()
     

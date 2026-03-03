@@ -14,9 +14,18 @@ logger = logging.getLogger(__name__)
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Обрабатывает команду /today.
-    
-    Показывает мероприятия на сегодня.
+    Обрабатывает команду `/today` и показывает мероприятия на сегодня.
+
+    Сценарий:
+        - обновляет `last_active` пользователя;
+        - запрашивает мероприятия на текущую дату через `get_events_for_date`;
+        - формирует список с указанием времени и аудитории;
+        - добавляет кнопки для перехода к завтрашнему дню или неделе.
+
+    Возможные ошибки:
+        ⚠️ ВНИМАНИЕ: если синхронизация календаря ещё не выполнялась или
+        Google Calendar пуст, пользователь увидит сообщение об отсутствии
+        мероприятий, что является нормальным сценарием.
     """
     if not update.effective_user or not update.message:
         return
@@ -66,7 +75,23 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def get_events_for_date(date) -> list:
-    """Возвращает события на указанную дату."""
+    """
+    Возвращает список событий на указанную дату.
+
+    Аргументы:
+        date: объект `date`, для которого нужно получить мероприятия.
+
+    Возвращает:
+        Список словарей с полями из `calendar_events` и дополнительным
+        полем `auditory_name` (техническое имя аудитории).
+
+    Примечания:
+        🔥 ВАЖНО (SQL): выборка:
+        - ограничена интервалом [date; date+1 день);
+        - фильтрует только подтверждённые события (`ce.status = 'confirmed'`);
+        - использует LEFT JOIN с `auditories`, чтобы не терять события
+          без привязанной аудитории.
+    """
     pool = get_db_pool()
     
     start_date = datetime.combine(date, datetime.min.time())

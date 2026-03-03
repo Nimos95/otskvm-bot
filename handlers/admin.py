@@ -162,8 +162,15 @@ async def admin_sync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 @require_roles(['manager', 'superadmin'])
 async def admin_db_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Показывает статистику по таблицам БД.
-    Доступно для manager и superadmin.
+    Показывает агрегированную статистику по ключевым таблицам БД.
+
+    Доступ:
+        Доступно для ролей `manager` и `superadmin`.
+
+    Примечания:
+        🔥 ВАЖНО (SQL): используется один запрос с несколькими подзапросами
+        `SELECT COUNT(*)`, чтобы минимизировать время round‑trip к базе и
+        получить срез по пользователям, аудиториям, статусам и назначениям.
     """
     query = update.callback_query
     await query.answer()
@@ -290,8 +297,16 @@ async def admin_send_test_reminder_handler(update: Update, context: ContextTypes
 @require_roles(['superadmin'])
 async def admin_test_completion_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Тестирует автоматическое завершение мероприятий.
-    Только для superadmin.
+    Тестирует автоматическое завершение мероприятий (`auto_complete_events`).
+
+    Доступ:
+        Только для `superadmin`.
+
+    Сценарий:
+        - запускает авто‑завершение;
+        - показывает количество обновлённых записей;
+        - дополнительно выбирает несколько последних завершённых мероприятий
+          для быстрой визуальной проверки.
     """
     query = update.callback_query
     await query.answer()
