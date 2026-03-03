@@ -55,6 +55,7 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LEFT JOIN auditories a ON ce.auditory_id = a.id
         WHERE DATE(ce.start_time) IN ({placeholders})
           AND ce.status = 'confirmed'
+          AND ce.start_time > NOW()
         ORDER BY ce.start_time
         """,
         *dates
@@ -129,6 +130,7 @@ async def show_engineers_for_event(query, event_id):
         FROM calendar_events ce
         LEFT JOIN auditories a ON ce.auditory_id = a.id
         WHERE ce.id = $1
+          AND ce.start_time > NOW()
         """,
         int(event_id)
     )
@@ -224,6 +226,19 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
     Назначает инженера на мероприятие.
     """
     pool = get_db_pool()
+
+    # Проверяем, что мероприятие ещё актуально
+    event = await pool.fetchrow(
+        """
+        SELECT start_time FROM calendar_events 
+        WHERE id = $1 AND start_time > NOW() AND status = 'confirmed'
+        """,
+        int(event_id)
+    )
+    
+    if not event:
+        await query.answer("❌ Нельзя назначить на прошедшее мероприятие", show_alert=True)
+        return
     
     # Проверяем, не назначен ли уже
     existing = await pool.fetchrow(
@@ -345,6 +360,7 @@ async def show_assign_list(query, context):
         LEFT JOIN auditories a ON ce.auditory_id = a.id
         WHERE DATE(ce.start_time) IN ({placeholders})
           AND ce.status = 'confirmed'
+          AND ce.start_time > NOW()
         ORDER BY ce.start_time
         """,
         *dates
