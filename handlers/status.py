@@ -5,12 +5,13 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from core.constants import AUDITORY_STATUSES
 from database import Database
 from utils.auditory_names import get_russian_name, get_english_name
 
 logger = logging.getLogger(__name__)
 
-VALID_STATUSES = ("green", "yellow", "red")
+VALID_STATUSES = AUDITORY_STATUSES
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

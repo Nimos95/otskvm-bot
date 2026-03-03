@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from config import config
+from core.constants import AUDITORY_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,14 @@ async def init_db_pool() -> None:
     """
     global _db_pool
     try:
-        _db_pool = await asyncpg.create_pool(config.DATABASE_URL)
+        # Небольшая настройка пула подключений:
+        # - min_size = 1, чтобы не держать лишние коннекты при простое
+        # - max_size = 10, чего достаточно для типичной нагрузки бота
+        _db_pool = await asyncpg.create_pool(
+            dsn=config.DATABASE_URL,
+            min_size=1,
+            max_size=10,
+        )
         logger.info("Пул подключений к БД успешно создан")
     except Exception as e:
         logger.exception("Не удалось создать пул подключений к БД: %s", e)
@@ -58,7 +66,8 @@ def get_db_pool() -> asyncpg.Pool:
 class Database:
     """Класс для работы с базой данных."""
 
-    VALID_STATUSES = ("green", "yellow", "red")
+    # Допустимые статусы аудиторий (общие константы в core.constants)
+    VALID_STATUSES = AUDITORY_STATUSES
 
     @staticmethod
     async def add_user(

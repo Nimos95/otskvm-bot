@@ -4,11 +4,18 @@ import logging
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 from database import get_db_pool
 from utils.auditory_names import get_russian_name
-import cyrtranslit
+from utils.translit import to_cyrillic
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +77,7 @@ async def show_my_events(message, user_id: int):
         
         # Обратная транслитерация
         title = event['title']
-        russian_title = cyrtranslit.to_cyrillic(title)
+        russian_title = to_cyrillic(title)
         
         # Аудитория
         auditory = get_russian_name(event['auditory_name']) if event['auditory_name'] else "не указана"
@@ -148,7 +155,7 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     end = event['end_time'].strftime("%H:%M")
     
     # Транслитерация
-    russian_title = cyrtranslit.to_cyrillic(event['title'])
+    russian_title = to_cyrillic(event['title'])
     auditory = get_russian_name(event['auditory_name']) if event['auditory_name'] else "не указана"
     if event.get('building'):
         building = get_russian_name(event['building'])
@@ -163,7 +170,7 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     if event['description']:
-        desc = cyrtranslit.to_cyrillic(event['description'])
+        desc = to_cyrillic(event['description'])
         text += f"📝 **Описание:** {desc}\n"
     
     text += f"\n**Выберите действие:**"
@@ -243,7 +250,7 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return ConversationHandler.END
             
             # Русское название для уведомлений
-            russian_title = cyrtranslit.to_cyrillic(event['title'])
+            russian_title = to_cyrillic(event['title'])
             
             # 1. Помечаем текущего инженера как выполнившего
             await conn.execute(
@@ -405,7 +412,7 @@ async def event_cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         event_id
     )
     
-    title = cyrtranslit.to_cyrillic(event['title']) if event else "Неизвестное мероприятие"
+    title = to_cyrillic(event['title']) if event else "Неизвестное мероприятие"
     
     await query.edit_message_text(
         f"❓ **Отмена мероприятия**\n\n"
@@ -494,7 +501,7 @@ async def event_cancel_reason(update: Update, context: ContextTypes.DEFAULT_TYPE
             event_id
         )
         
-        russian_title = cyrtranslit.to_cyrillic(event_info['title'])
+        russian_title = to_cyrillic(event_info['title'])
         auditory = get_russian_name(event_info['auditory_name']) if event_info['auditory_name'] else "Не указана"
         
         # Получаем менеджеров

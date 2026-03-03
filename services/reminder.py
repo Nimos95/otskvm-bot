@@ -3,11 +3,19 @@
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
+from core.constants import (
+    ASSIGNMENT_STATUS_ACCEPTED,
+    ASSIGNMENT_STATUS_ASSIGNED,
+    ASSIGNMENT_STATUS_DONE,
+    ASSIGNMENT_STATUS_REPLACING,
+    NOTIFICATION_COMPLETION_REMINDER,
+    NOTIFICATION_REMINDER,
+)
 from database import get_db_pool
 from utils.auditory_names import get_russian_name
-import cyrtranslit
+from utils.translit import to_cyrillic
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +157,11 @@ async def is_event_completed(event_id: int) -> bool:
         """
         SELECT EXISTS (
             SELECT 1 FROM event_assignments 
-            WHERE event_id = $1 AND status = 'done'
+            WHERE event_id = $1 AND status = $2
         )
         """,
-        event_id
+        event_id,
+        ASSIGNMENT_STATUS_DONE,
     )
     return result
 
@@ -231,18 +240,18 @@ async def send_reminder(event: Dict[str, Any], bot):
     )
     
     # Если статус не 'assigned' — не отправляем напоминание
-    if current_status != 'assigned':
+    if current_status != ASSIGNMENT_STATUS_ASSIGNED:
         status_messages = {
-            'accepted': f"Инженер {engineer_name} уже подтвердил участие",
-            'replacing': f"Инженер {engineer_name} запросил замену",
-            'done': f"Мероприятие {event_id} уже завершено",
+            ASSIGNMENT_STATUS_ACCEPTED: f"Инженер {engineer_name} уже подтвердил участие",
+            ASSIGNMENT_STATUS_REPLACING: f"Инженер {engineer_name} запросил замену",
+            ASSIGNMENT_STATUS_DONE: f"Мероприятие {event_id} уже завершено",
         }
         message = status_messages.get(current_status, f"Мероприятие {event_id} имеет статус {current_status}")
         logger.info(f"{message}, напоминание пропущено")
         return
     
     # 🔍 ПРОВЕРКА 3: Можно ли отправить уведомление (защита от дублирования)
-    if not await can_send_notification(event_id, engineer_id, 'reminder'):
+    if not await can_send_notification(event_id, engineer_id, NOTIFICATION_REMINDER):
         return
     
     # Форматируем время
@@ -256,7 +265,7 @@ async def send_reminder(event: Dict[str, Any], bot):
         auditory += f" ({building})"
     
     # Обратная транслитерация названия
-    russian_title = cyrtranslit.to_cyrillic(title)
+    russian_title = to_cyrillic(title)
     
     # Создаём клавиатуру
     keyboard = [
@@ -282,7 +291,7 @@ async def send_reminder(event: Dict[str, Any], bot):
     )
     
     # Логируем в таблицу notifications
-    await log_notification(event_id, engineer_id, 'reminder')
+    await log_notification(event_id, engineer_id, NOTIFICATION_REMINDER)
     
     logger.info(f"Напоминание отправлено {engineer_name} (ID: {engineer_id}) для мероприятия {event_id}")
 
@@ -321,16 +330,20 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
     )
     
     # Если статус не 'accepted' — не отправляем
-    if current_status != 'accepted':
+    if current_status != ASSIGNMENT_STATUS_ACCEPTED:
         logger.info(f"Мероприятие {event_id} имеет статус {current_status}, напоминание о завершении пропущено")
         return
     
     # 🔍 ПРОВЕРКА 3: Можно ли отправить уведомление (защита от дублирования)
-    if not await can_send_notification(event_id, engineer_id, 'completion_reminder'):
+    if not await can_send_notification(
+        event_id,
+        engineer_id,
+        NOTIFICATION_COMPLETION_REMINDER,
+    ):
         return
     
     # Обратная транслитерация
-    russian_title = cyrtranslit.to_cyrillic(title)
+    russian_title = to_cyrillic(title)
     time_str = end_time.strftime("%H:%M")
     date_str = end_time.strftime("%d.%m")
     
@@ -360,7 +373,7 @@ async def send_completion_reminder(event: Dict[str, Any], bot):
     )
     
     # Логируем
-    await log_notification(event_id, engineer_id, 'completion_reminder')
+    await log_notification(event_id, engineer_id, NOTIFICATION_COMPLETION_REMINDER)
     
     logger.info(f"Напоминание о завершении отправлено {engineer_name} для мероприятия {event_id}")
 
@@ -392,13 +405,16 @@ async def auto_complete_events() -> int:
     result = await pool.execute(
         """
         UPDATE event_assignments 
-        SET status = 'done', completed_at = NOW()
+        SET status = $1, completed_at = NOW()
         WHERE event_id IN (
             SELECT id FROM calendar_events 
             WHERE end_time < NOW() - INTERVAL '1 hour'
         )
-        AND status IN ('accepted', 'assigned')
-        """
+        AND status IN ($2, $3)
+        """,
+        ASSIGNMENT_STATUS_DONE,
+        ASSIGNMENT_STATUS_ACCEPTED,
+        ASSIGNMENT_STATUS_ASSIGNED
     )
     
     # Парсим результат, чтобы получить количество обновлённых строк
@@ -476,7 +492,7 @@ async def send_morning_summary(bot):
         end_time_str = event['end_time'].strftime("%H:%M")
         
         # Обратная транслитерация названия мероприятия
-        russian_title = cyrtranslit.to_cyrillic(event['title'])
+        russian_title = to_cyrillic(event['title'])
         
         # Русское название аудитории
         auditory = 'не указана'
@@ -510,13 +526,13 @@ async def send_morning_summary(bot):
             status = event['assignment_status']
             
             # Выбираем иконку в зависимости от статуса
-            if status == 'accepted':
+            if status == ASSIGNMENT_STATUS_ACCEPTED:
                 status_icon = "✅"
                 status_text = "подтвердил"
-            elif status == 'assigned':
+            elif status == ASSIGNMENT_STATUS_ASSIGNED:
                 status_icon = "⏳"
                 status_text = "ожидает подтверждения"
-            elif status == 'replacing':
+            elif status == ASSIGNMENT_STATUS_REPLACING:
                 status_icon = "🔄"
                 status_text = "ищет замену"
             else:

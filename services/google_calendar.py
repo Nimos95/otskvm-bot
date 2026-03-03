@@ -5,7 +5,6 @@ import logging
 import os
 from typing import List, Dict, Any, Optional
 
-import cyrtranslit
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -14,6 +13,7 @@ from googleapiclient.errors import HttpError
 
 from config import config
 from database import get_db_pool
+from utils.translit import to_latin
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ class GoogleCalendarClient:
                 ru_title = event.get("summary", "Без названия")
                 
                 # Транслитерируем в английское для хранения в БД
-                en_title = cyrtranslit.to_latin(ru_title)
+                en_title = to_latin(ru_title)
                 
                 # Пытаемся определить аудиторию
                 auditory_name = self._extract_auditory_from_event(event)
@@ -141,7 +141,7 @@ class GoogleCalendarClient:
                 
                 if auditory_name:
                     # Транслитерируем название аудитории для поиска в БД
-                    en_auditory = cyrtranslit.to_latin(auditory_name)
+                    en_auditory = to_latin(auditory_name)
                     # logger.info(f"  Транслитерированное название: '{en_auditory}'")
                     row = await pool.fetchrow(
                         "SELECT id FROM auditories WHERE name = $1",

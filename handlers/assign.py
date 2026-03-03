@@ -1,19 +1,18 @@
 """Обработчик назначения ответственных на мероприятия."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta 
+
+import cyrtranslit
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from config import config
 from database import get_db_pool
 from utils.auditory_names import get_russian_name
-
-from config import config
-
 from utils.roles import require_roles
-
-import cyrtranslit
+from utils.translit import to_cyrillic
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +79,7 @@ async def assign_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = event["title"]
         
         # Обратная транслитерация названия мероприятия
-        russian_title = cyrtranslit.to_cyrillic(title)
+        russian_title = to_cyrillic(title)
         
         # Получаем русское название аудитории
         auditory = get_russian_name(event["auditory_name"]) if event["auditory_name"] else "нет аудитории"
@@ -164,7 +163,7 @@ async def show_engineers_for_event(query, event_id):
     
     # Обратная транслитерация названия мероприятия
     title = event_row["title"]
-    russian_title = cyrtranslit.to_cyrillic(title)
+    russian_title = to_cyrillic(title)
     
     # Получаем русское название аудитории
     auditory = get_russian_name(event_row["auditory_name"]) if event_row["auditory_name"] else "нет аудитории"
@@ -281,7 +280,7 @@ async def assign_engineer_to_event(query, context, user_id, event_id, engineer_i
     if event_info and engineer_info:
         date_str = event_info["start_time"].strftime("%d.%m.%Y %H:%M")
         title = event_info["title"]
-        russian_title = cyrtranslit.to_cyrillic(title)
+        russian_title = to_cyrillic(title)
         
         # Отправляем уведомление назначенному инженеру
         try:
@@ -475,7 +474,7 @@ async def show_multi_assign(query, context, event_id):
     
     # Обратная транслитерация
     title = event_row["title"]
-    russian_title = cyrtranslit.to_cyrillic(title)
+    russian_title = to_cyrillic(title)
     
     auditory = get_russian_name(event_row["auditory_name"]) if event_row["auditory_name"] else "нет аудитории"
     building = event_row["building"] or ""
@@ -636,7 +635,7 @@ async def send_assignment_notification(context, event_id, engineer_id):
     
     date_str = event_info["start_time"].strftime("%d.%m.%Y %H:%M")
     title = event_info["title"]
-    russian_title = cyrtranslit.to_cyrillic(title)
+    russian_title = to_cyrillic(title)
     
     keyboard = [
         [

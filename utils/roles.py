@@ -6,7 +6,7 @@ from typing import List, Callable, Any
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from database import Database
+from database import Database, get_db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -169,11 +169,11 @@ async def set_user_role(admin_id: int, target_user_id: int, new_role: str) -> bo
         return False
     
     # Обновляем роль в БД
-    pool = Database.get_pool()
+    pool = get_db_pool()
     await pool.execute(
         "UPDATE users SET role = $1 WHERE telegram_id = $2",
         new_role,
-        target_user_id
+        target_user_id,
     )
     
     logger.info(f"Роль пользователя {target_user_id} изменена на {new_role}")

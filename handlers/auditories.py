@@ -5,7 +5,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from database import Database, get_db_pool
+from repositories.auditories import get_active_auditories
 from utils.auditory_names import get_russian_name
 
 logger = logging.getLogger(__name__)
@@ -18,9 +18,8 @@ async def show_auditories(message):
     Args:
         message: сообщение Telegram, в которое нужно отправить список
     """
-    pool = get_db_pool()
-    rows = await pool.fetch("SELECT id, name FROM auditories WHERE is_active = true ORDER BY name")
-    
+    rows = await get_active_auditories()
+
     if not rows:
         await message.reply_text("В базе нет аудиторий")
         return

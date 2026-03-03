@@ -10,10 +10,20 @@ from services.reminder import log_notification
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from core.constants import (
+    ASSIGNMENT_STATUS_ACCEPTED,
+    ASSIGNMENT_STATUS_ASSIGNED,
+    ASSIGNMENT_STATUS_DONE,
+)
 from database import Database, get_db_pool
+from repositories.auditories import (
+    get_active_auditories,
+    get_auditory_name_by_id,
+)
 from utils.auditory_names import get_russian_name
+from utils.translit import to_cyrillic
 from handlers.today import get_events_for_date
-from handlers import start  
+from handlers import start
 from handlers.admin import admin_callbacks
 
 from handlers.help import (
@@ -521,7 +531,7 @@ async def show_today_schedule_calendar(query):
     for event in events:
         time_str = event["start_time"].strftime("%H:%M")
         en_title = event["title"]
-        ru_title = cyrtranslit.to_cyrillic(en_title)
+        ru_title = to_cyrillic(en_title)
         
         if event.get("auditory_name"):
             rus_name = get_russian_name(event["auditory_name"])
@@ -575,7 +585,7 @@ async def show_tomorrow_schedule_calendar(query):
     for event in events:
         time_str = event["start_time"].strftime("%H:%M")
         en_title = event["title"]
-        ru_title = cyrtranslit.to_cyrillic(en_title)
+        ru_title = to_cyrillic(en_title)
         
         if event.get("auditory_name"):
             rus_name = get_russian_name(event["auditory_name"])
@@ -639,7 +649,7 @@ async def show_week_schedule_calendar(query):
         for event in events_by_day[date]:
             time_str = event["start_time"].strftime("%H:%M")
             en_title = event["title"]
-            ru_title = cyrtranslit.to_cyrillic(en_title)
+            ru_title = to_cyrillic(en_title)
             
             if event.get("auditory_name"):
                 rus_name = get_russian_name(event["auditory_name"])
@@ -667,9 +677,8 @@ async def show_week_schedule_calendar(query):
 
 async def show_auditories(query):
     """Показывает список аудиторий с русскими названиями на кнопках."""
-    pool = get_db_pool()
-    rows = await pool.fetch("SELECT id, name FROM auditories WHERE is_active = true ORDER BY name")
-    
+    rows = await get_active_auditories()
+
     if not rows:
         await query.edit_message_text("В базе нет аудиторий")
         return
@@ -698,21 +707,23 @@ async def show_auditories(query):
 
 async def show_status_buttons(query, auditory_id, context):
     """Показывает кнопки выбора статуса и текущее состояние аудитории."""
-    pool = get_db_pool()
-    
-    row = await pool.fetchrow("SELECT name FROM auditories WHERE id = $1", int(auditory_id))
-    if not row:
+    name = await get_auditory_name_by_id(int(auditory_id))
+    if not name:
         await query.edit_message_text("Аудитория не найдена")
         return
     
-    eng_name = row["name"]
+    eng_name = name
     rus_name = get_russian_name(eng_name)
     
     last_status = await Database.get_latest_status(int(auditory_id))
     
     status_text = ""
     if last_status:
-        status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(last_status["status"], "⚪")
+        status_emoji = {
+            "green": "🟢",
+            "yellow": "🟡",
+            "red": "🔴",
+        }.get(last_status["status"], "⚪")
         status_time = last_status["created_at"].strftime("%d.%m.%Y %H:%M")
         status_text = f"\n\n**Текущий статус:** {status_emoji} {last_status['status'].upper()}\n_Обновлено: {status_time}_"
         if last_status.get("comment"):
