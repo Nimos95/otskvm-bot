@@ -200,7 +200,8 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обработчик завершения мероприятия (после выбора действия).
+    Обработчик завершения мероприятия.
+    При завершении одним инженером - автоматически завершает за всех остальных.
     """
     query = update.callback_query
     await query.answer()
@@ -213,66 +214,170 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
     user_id = query.from_user.id
     pool = get_db_pool()
     
-    # Проверяем мероприятие
-    event = await pool.fetchrow(
-        """
-        SELECT 
-            ce.title,
-            ce.start_time,
-            ce.end_time,
-            ea.status
-        FROM event_assignments ea
-        JOIN calendar_events ce ON ea.event_id = ce.id
-        WHERE ea.event_id = $1 AND ea.assigned_to = $2
-        """,
-        event_id, user_id
-    )
-    
-    if not event:
-        await query.edit_message_text("❌ Мероприятие не найдено")
-        return ConversationHandler.END
-    
-    if event['status'] != 'accepted':
-        await query.edit_message_text("❌ Можно завершить только подтверждённые мероприятия")
-        return ConversationHandler.END
-    
-    # Отмечаем как выполненное
-    await pool.execute(
-        """
-        UPDATE event_assignments 
-        SET status = 'done', completed_at = NOW()
-        WHERE event_id = $1 AND assigned_to = $2
-        """,
-        event_id, user_id
-    )
-    
-    # Русское название
-    russian_title = cyrtranslit.to_cyrillic(event['title'])
-    
-    # Определяем тип завершения
-    now = datetime.now()
-    completion_type = "досрочно" if now < event['end_time'] else ""
-    
-    # Уведомление пользователю
-    await query.edit_message_text(
-        f"✅ Мероприятие *{russian_title}* завершено {completion_type}!\n"
-        f"Спасибо за работу!",
-        parse_mode="Markdown"
-    )
-    
-    # Уведомляем менеджеров
-    managers = await pool.fetch("SELECT telegram_id FROM users WHERE role IN ('manager', 'superadmin')")
-    for manager in managers:
-        try:
-            await context.bot.send_message(
-                chat_id=manager['telegram_id'],
-                text=f"✅ {query.from_user.full_name} завершил мероприятие *{russian_title}*",
+    # Начинаем транзакцию для целостности данных
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Проверяем мероприятие и получаем информацию о нём
+            event = await conn.fetchrow(
+                """
+                SELECT 
+                    ce.title,
+                    ce.start_time,
+                    ce.end_time,
+                    ea.status,
+                    (SELECT COUNT(*) FROM event_assignments 
+                     WHERE event_id = ce.id AND status IN ('assigned', 'accepted')) as total_active
+                FROM event_assignments ea
+                JOIN calendar_events ce ON ea.event_id = ce.id
+                WHERE ea.event_id = $1 AND ea.assigned_to = $2
+                """,
+                event_id, user_id
+            )
+            
+            if not event:
+                await query.edit_message_text("❌ Мероприятие не найдено")
+                return ConversationHandler.END
+            
+            if event['status'] != 'accepted':
+                await query.edit_message_text("❌ Можно завершить только подтверждённые мероприятия")
+                return ConversationHandler.END
+            
+            # Русское название для уведомлений
+            russian_title = cyrtranslit.to_cyrillic(event['title'])
+            
+            # 1. Помечаем текущего инженера как выполнившего
+            await conn.execute(
+                """
+                UPDATE event_assignments 
+                SET status = 'done', completed_at = NOW()
+                WHERE event_id = $1 AND assigned_to = $2
+                """,
+                event_id, user_id
+            )
+            
+            # 2. Находим ВСЕХ других инженеров, назначенных на это мероприятие
+            other_engineers = await conn.fetch(
+                """
+                SELECT 
+                    u.telegram_id,
+                    u.full_name
+                FROM event_assignments ea
+                JOIN users u ON ea.assigned_to = u.telegram_id
+                WHERE ea.event_id = $1 
+                  AND ea.assigned_to != $2
+                  AND ea.status IN ('assigned', 'accepted')
+                """,
+                event_id, user_id
+            )
+            
+            other_count = len(other_engineers) if other_engineers else 0
+            
+            # 3. Если есть другие инженеры - автоматически завершаем за них
+            if other_engineers:
+                await conn.execute(
+                    """
+                    UPDATE event_assignments 
+                    SET status = 'done', completed_at = NOW()
+                    WHERE event_id = $1 AND assigned_to != $2
+                      AND status IN ('assigned', 'accepted')
+                    """,
+                    event_id, user_id
+                )
+                
+                # 4. Отправляем уведомления остальным инженерам
+                completer_name = query.from_user.full_name
+                for eng in other_engineers:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=eng['telegram_id'],
+                            text=(
+                                f"👥 *Мероприятие автоматически завершено*\n\n"
+                                f"📅 *{russian_title}*\n"
+                                f"✅ Завершил: {completer_name}\n\n"
+                                f"Вы автоматически отмечены как выполнивший задачу.\n"
+                                f"Спасибо за работу!"
+                            ),
+                            parse_mode="Markdown"
+                        )
+                        logger.info(f"Уведомление отправлено инженеру {eng['telegram_id']} о автоматическом завершении")
+                    except Exception as e:
+                        logger.error(f"Не удалось уведомить инженера {eng['telegram_id']}: {e}")
+            
+            # Определяем тип завершения для основного пользователя
+            now = datetime.now()
+            if now < event['end_time']:
+                completion_type = "досрочно"
+                completion_emoji = "⏱️"
+            else:
+                completion_type = ""
+                completion_emoji = "✅"
+            
+            # Формируем сообщение для основного пользователя
+            if other_count > 0:
+                others_message = f"\n\n👥 Также отмечены как выполнившие: {other_count} {self._get_engineer_word(other_count)}"
+            else:
+                others_message = ""
+            
+            # Подтверждение основному пользователю
+            await query.edit_message_text(
+                f"{completion_emoji} Мероприятие *{russian_title}* завершено {completion_type}!\n"
+                f"{others_message}\n\n"
+                f"Спасибо за работу!",
                 parse_mode="Markdown"
             )
-        except Exception as e:
-            logger.error(f"Не удалось уведомить менеджера {manager['telegram_id']}: {e}")
+            
+            # 5. Получаем список менеджеров для уведомлений
+            managers = await conn.fetch(
+                "SELECT telegram_id FROM users WHERE role IN ('manager', 'superadmin')"
+            )
+            
+            # Формируем сообщение для менеджеров
+            if other_count > 0:
+                others_list = ", ".join([eng['full_name'] for eng in other_engineers[:3]])
+                if other_count > 3:
+                    others_list += f" и ещё {other_count - 3}"
+                others_text = f"\n👥 Также отмечены: {others_list}"
+            else:
+                others_text = ""
+            
+            manager_text = (
+                f"✅ *Мероприятие завершено*\n\n"
+                f"📅 {russian_title}\n"
+                f"👤 Завершил: {query.from_user.full_name}"
+                f"{others_text}"
+            )
+            
+            # Отправляем уведомления менеджерам
+            for manager in managers:
+                try:
+                    await context.bot.send_message(
+                        chat_id=manager['telegram_id'],
+                        text=manager_text,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить менеджера {manager['telegram_id']}: {e}")
+    
+    # Логируем действие
+    logger.info(
+        f"Пользователь {user_id} завершил мероприятие {event_id}. "
+        f"Автоматически завершено за {other_count if 'other_count' in locals() else 0} других инженеров."
+    )
+    
+    # Очищаем контекст
+    if 'selected_event_id' in context.user_data:
+        del context.user_data['selected_event_id']
     
     return ConversationHandler.END
+
+def _get_engineer_word(count: int) -> str:
+    """Вспомогательная функция для склонения слова 'инженер'."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "инженера"
+    elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+        return "инженеров"
+    else:
+        return "инженеров"
 
 
 async def event_cancel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
