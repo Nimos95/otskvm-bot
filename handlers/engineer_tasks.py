@@ -314,7 +314,7 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
             
             # Формируем сообщение для основного пользователя
             if other_count > 0:
-                others_message = f"\n\n👥 Также отмечены как выполнившие: {other_count} {self._get_engineer_word(other_count)}"
+                others_message = f"\n\n👥 Также отмечены как выполнившие: {other_count} {_get_engineer_word(other_count)}"
             else:
                 others_message = ""
             
@@ -370,8 +370,10 @@ async def event_complete_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     return ConversationHandler.END
 
+
+# Вспомогательная функция для склонения слова "инженер"
 def _get_engineer_word(count: int) -> str:
-    """Вспомогательная функция для склонения слова 'инженер'."""
+    """Возвращает правильное склонение слова 'инженер' для числа."""
     if count % 10 == 1 and count % 100 != 11:
         return "инженера"
     elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
