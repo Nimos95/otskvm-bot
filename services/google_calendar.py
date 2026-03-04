@@ -14,6 +14,8 @@ from googleapiclient.errors import HttpError
 from config import config
 from database import get_db_pool
 from utils.translit import to_latin
+from utils.auditory_names import get_english_name
+from utils.auditory_normalizer import AuditoryNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,60 @@ class GoogleCalendarClient:
             return description.strip()
         
         return None
+
+    async def _find_auditory_id(
+        self,
+        raw_auditory_name: str,
+        pool,
+    ) -> Optional[int]:
+        """
+        Пытается найти ID аудитории по «сырому» названию из Google Calendar.
+
+        Алгоритм:
+        1. Прямая транслитерация и поиск по БД (как было реализовано ранее).
+        2. Если не найдено — нормализация названия и повторный поиск.
+        3. При неудаче — логирование warning для последующего пополнения словаря.
+        """
+        name = (raw_auditory_name or "").strip()
+        if not name:
+            return None
+
+        # 1. Прямая транслитерация (как раньше)
+        en_auditory = to_latin(name)
+        row = await pool.fetchrow(
+            "SELECT id FROM auditories WHERE name = $1",
+            en_auditory,
+        )
+        if row:
+            return row["id"]
+
+        # 2. Нормализация и повторный поиск
+        normalized = AuditoryNormalizer.normalize(name)
+        if normalized != name:
+            logger.debug(
+                "Нормализовано название аудитории: '%s' -> '%s'",
+                name,
+                normalized,
+            )
+
+        # Используем словарь соответствий английских и русских названий
+        # для получения ключа, который хранится в таблице `auditories`.
+        english_name = get_english_name(normalized)
+        row = await pool.fetchrow(
+            "SELECT id FROM auditories WHERE name = $1",
+            english_name,
+        )
+        if row:
+            return row["id"]
+
+        # 3. Ничего не нашли — логируем предупреждение
+        logger.warning(
+            "Аудитория не найдена по названию '%s' (нормализовано как '%s'). "
+            "Проверь справочник аудиторий и при необходимости добавь вариант в ALIASES.",
+            name,
+            normalized,
+        )
+        return None
     
     async def save_events_to_db(self, events: List[Dict[str, Any]]):
         """
@@ -163,19 +219,16 @@ class GoogleCalendarClient:
                 
                 # Пытаемся определить аудиторию
                 auditory_name = self._extract_auditory_from_event(event)
-                auditory_id = None
-                
+                auditory_id: Optional[int] = None
+
                 if auditory_name:
-                    # Транслитерируем название аудитории для поиска в БД
-                    en_auditory = to_latin(auditory_name)
-                    # logger.info(f"  Транслитерированное название: '{en_auditory}'")
-                    row = await pool.fetchrow(
-                        "SELECT id FROM auditories WHERE name = $1",
-                        en_auditory
-                    )
-                    if row:
-                        auditory_id = row["id"]
-                        logger.debug(f"Найдена аудитория {auditory_name} (ID: {auditory_id})")
+                    auditory_id = await self._find_auditory_id(auditory_name, pool)
+                    if auditory_id is not None:
+                        logger.debug(
+                            "Найдена аудитория '%s' (ID: %s)",
+                            auditory_name,
+                            auditory_id,
+                        )
                 
                 # Вставляем или обновляем событие в таблицу calendar_events.
                 # 🔥 ВАЖНО (SQL): ключом уникальности является `google_event_id`,
