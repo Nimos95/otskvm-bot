@@ -14,7 +14,12 @@ import pandas as pd
 import streamlit as st
 
 from database.connection import get_connection
-from utils.constants import ROLE_ENGINEER, ROLE_MANAGER, ROLE_SUPERADMIN
+from utils.constants import (
+    ASSIGNMENT_STATUS_DONE,
+    ROLE_ENGINEER,
+    ROLE_MANAGER,
+    ROLE_SUPERADMIN,
+)
 
 
 ENGINEER_ROLES: Sequence[str] = (ROLE_ENGINEER, ROLE_MANAGER, ROLE_SUPERADMIN)
@@ -155,6 +160,188 @@ def get_activity(
         ).astype("Int64")
     else:
         df["activity_weekday"] = df["created_at"].dt.dayofweek.astype("Int64")
+
+    return df
+
+
+@st.cache_data(ttl=300)
+def get_events_kpi(
+    start_date: date,
+    end_date: date,
+    engineer_id: Optional[int] = None,
+) -> dict:
+    """Возвращает KPI по мероприятиям за период.
+
+    Показатели:
+        - total_events: всего мероприятий за период;
+        - completed_events: мероприятий со статусом «done»;
+        - active_engineers: количество уникальных инженеров;
+        - avg_per_day: среднее количество мероприятий в день.
+    """
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt_exclusive = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    base_query = """
+        SELECT
+            COUNT(DISTINCT ce.id) AS total_events,
+            COUNT(DISTINCT CASE WHEN ea.status = %s THEN ce.id END) AS completed_events,
+            COUNT(DISTINCT u.telegram_id) AS active_engineers
+        FROM calendar_events ce
+        JOIN event_assignments ea ON ce.id = ea.event_id
+        JOIN users u ON ea.assigned_to = u.telegram_id
+        WHERE ce.start_time >= %s
+          AND ce.start_time < %s
+          AND u.is_active = TRUE
+          AND u.role = ANY(%s)
+    """
+
+    params: List[object] = [
+        ASSIGNMENT_STATUS_DONE,
+        start_dt,
+        end_dt_exclusive,
+        list(ENGINEER_ROLES),
+    ]
+
+    if engineer_id is not None:
+        try:
+            engineer_id_int = int(engineer_id)
+        except (TypeError, ValueError):
+            engineer_id_int = None
+        if engineer_id_int is not None:
+            base_query += " AND ea.assigned_to = %s"
+            params.append(engineer_id_int)
+
+    df = _query_to_dataframe(base_query, tuple(params))
+    if df.empty:
+        total_events = 0
+        completed_events = 0
+        active_engineers = 0
+    else:
+        row = df.iloc[0]
+        total_events = int(row.get("total_events") or 0)
+        completed_events = int(row.get("completed_events") or 0)
+        active_engineers = int(row.get("active_engineers") or 0)
+
+    period_days = max(1, (end_date - start_date).days + 1)
+    avg_per_day = round(total_events / period_days, 1) if total_events else 0.0
+
+    return {
+        "total_events": total_events,
+        "completed_events": completed_events,
+        "active_engineers": active_engineers,
+        "avg_per_day": avg_per_day,
+    }
+
+
+@st.cache_data(ttl=300)
+def get_events_by_day(
+    start_date: date,
+    end_date: date,
+    engineer_id: Optional[int] = None,
+) -> pd.DataFrame:
+    """Возвращает агрегированную по дням активность по мероприятиям."""
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt_exclusive = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    base_query = """
+        SELECT
+            DATE(ce.start_time) AS date,
+            COUNT(ce.id) AS count
+        FROM calendar_events ce
+        JOIN event_assignments ea ON ce.id = ea.event_id
+        JOIN users u ON ea.assigned_to = u.telegram_id
+        WHERE ce.start_time >= %s
+          AND ce.start_time < %s
+          AND u.is_active = TRUE
+          AND u.role = ANY(%s)
+    """
+
+    params: List[object] = [start_dt, end_dt_exclusive, list(ENGINEER_ROLES)]
+
+    if engineer_id is not None:
+        try:
+            engineer_id_int = int(engineer_id)
+        except (TypeError, ValueError):
+            engineer_id_int = None
+        if engineer_id_int is not None:
+            base_query += " AND ea.assigned_to = %s"
+            params.append(engineer_id_int)
+
+    base_query += """
+        GROUP BY DATE(ce.start_time)
+        ORDER BY date
+    """
+
+    df = _query_to_dataframe(base_query, tuple(params))
+    if df.empty:
+        return df
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+
+    return df
+
+
+@st.cache_data(ttl=300)
+def get_events_per_engineer_stats(
+    start_date: date,
+    end_date: date,
+    engineer_id: Optional[int] = None,
+) -> pd.DataFrame:
+    """Возвращает агрегированную статистику по мероприятиям для каждого инженера.
+
+    Колонки:
+        - full_name — ФИО инженера;
+        - events_count — количество мероприятий;
+        - days_active — количество дней с мероприятиями;
+        - first_activity — дата первой активности;
+        - last_activity — дата последней активности.
+    """
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt_exclusive = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    base_query = """
+        SELECT
+            u.full_name,
+            COUNT(ce.id) AS events_count,
+            COUNT(DISTINCT DATE(ce.start_time)) AS days_active,
+            MIN(DATE(ce.start_time)) AS first_activity,
+            MAX(DATE(ce.start_time)) AS last_activity
+        FROM users u
+        JOIN event_assignments ea ON u.telegram_id = ea.assigned_to
+        JOIN calendar_events ce ON ea.event_id = ce.id
+        WHERE ce.start_time >= %s
+          AND ce.start_time < %s
+          AND u.is_active = TRUE
+          AND u.role = ANY(%s)
+    """
+
+    params: List[object] = [start_dt, end_dt_exclusive, list(ENGINEER_ROLES)]
+
+    if engineer_id is not None:
+        try:
+            engineer_id_int = int(engineer_id)
+        except (TypeError, ValueError):
+            engineer_id_int = None
+        if engineer_id_int is not None:
+            base_query += " AND ea.assigned_to = %s"
+            params.append(engineer_id_int)
+
+    base_query += """
+        GROUP BY u.telegram_id, u.full_name
+        ORDER BY events_count DESC
+    """
+
+    df = _query_to_dataframe(base_query, tuple(params))
+    if df.empty:
+        return df
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        for col in ("first_activity", "last_activity"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
 
     return df
 

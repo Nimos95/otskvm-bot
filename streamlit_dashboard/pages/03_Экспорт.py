@@ -19,7 +19,7 @@ from utils.formatting import format_date_range
 
 st.set_page_config(page_title="Экспорт | OTSKVM Bot", page_icon="📥", layout="wide")
 
-st.title("Экспорт данных")
+st.title("Экспорт")
 
 start = st.date_input("Начало периода", value=date.today() - timedelta(days=6), key="export_start")
 end = st.date_input("Конец периода", value=date.today(), key="export_end")
@@ -46,3 +46,4 @@ st.download_button(
 st.dataframe(df.head(100), width="stretch", hide_index=True)
 if len(df) > 100:
     st.caption("Показаны первые 100 записей. В CSV — все данные.")
+

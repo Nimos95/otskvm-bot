@@ -100,3 +100,40 @@ def render_heatmap(df: pd.DataFrame) -> None:
         height=400,
     )
     st.plotly_chart(fig, width="stretch")
+
+
+def render_events_daily_line_chart(daily_df: pd.DataFrame) -> None:
+    """Линейный график количества мероприятий по дням."""
+    if daily_df.empty:
+        st.info("Нет данных для графика.")
+        return
+
+    fig = px.line(
+        daily_df,
+        x="date",
+        y="count",
+        title="Активность по дням",
+        labels={"date": "Дата", "count": "Количество мероприятий"},
+    )
+    fig.update_layout(xaxis_tickformat="%d.%m", height=350)
+    st.plotly_chart(fig, width="stretch")
+
+
+def render_events_top10_bar(top_df: pd.DataFrame) -> None:
+    """Горизонтальная диаграмма топ-10 инженеров по количеству мероприятий."""
+    if top_df.empty:
+        st.info("Нет данных для графика.")
+        return
+
+    # Сортируем от меньшего к большему, чтобы самые активные были сверху.
+    top_sorted = top_df.sort_values("events_count", ascending=True)
+    fig = px.bar(
+        top_sorted,
+        x="events_count",
+        y="full_name",
+        orientation="h",
+        title="Топ-10 инженеров по мероприятиям",
+        labels={"events_count": "Количество мероприятий", "full_name": "Инженер"},
+    )
+    fig.update_layout(height=400, margin=dict(l=120))
+    st.plotly_chart(fig, width="stretch")

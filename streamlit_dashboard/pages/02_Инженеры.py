@@ -17,9 +17,9 @@ from database.queries import get_active_engineers, get_activity
 from utils.formatting import format_engineer_name, format_datetime
 
 
-st.set_page_config(page_title="По инженерам | OTSKVM Bot", page_icon="👤", layout="wide")
+st.set_page_config(page_title="Инженеры | OTSKVM Bot", page_icon="👤", layout="wide")
 
-st.title("Детализация по инженерам")
+st.title("Инженеры")
 
 engineers_df = get_active_engineers()
 if engineers_df.empty:
@@ -49,7 +49,7 @@ end = today
 
 df = get_activity(start, end, engineer_ids=[engineer_id], building=None)
 if df.empty:
-    st.info(f"Нет активности за последние 30 дней для выбранного инженера.")
+    st.info("Нет активности за последние 30 дней для выбранного инженера.")
     st.stop()
 
 total_marks = len(df)
@@ -68,3 +68,4 @@ df_display = df[["created_at", "activity_date", "activity_hour", "building"]].co
 df_display["created_at"] = df_display["created_at"].apply(format_datetime)
 df_display.columns = ["Дата и время", "Дата", "Час", "Корпус"]
 st.dataframe(df_display, width="stretch", hide_index=True)
+
