@@ -345,3 +345,131 @@ def get_events_per_engineer_stats(
 
     return df
 
+
+@st.cache_data(ttl=300)
+def get_active_auditories_with_latest_status() -> pd.DataFrame:
+    """Возвращает список активных аудиторий с их последним статусом.
+
+    Колонки:
+        - id — идентификатор аудитории;
+        - building — корпус;
+        - name — название аудитории;
+        - floor — этаж;
+        - equipment — оборудование;
+        - current_status — последний статус (green/yellow/red/none);
+        - comment — комментарий к последнему статусу;
+        - last_update — дата/время последнего обновления;
+        - last_reporter — ФИО инженера, оставившего последнюю отметку.
+    """
+    query = """
+        WITH latest_status AS (
+            SELECT DISTINCT ON (auditory_id)
+                auditory_id,
+                status,
+                comment,
+                created_at,
+                reported_by
+            FROM status_log
+            ORDER BY auditory_id, created_at DESC
+        )
+        SELECT
+            a.id,
+            a.building,
+            a.name,
+            a.floor,
+            a.equipment,
+            COALESCE(ls.status, 'none') AS current_status,
+            ls.comment,
+            ls.created_at AS last_update,
+            u.full_name AS last_reporter
+        FROM auditories a
+        LEFT JOIN latest_status ls ON a.id = ls.auditory_id
+        LEFT JOIN users u ON ls.reported_by = u.telegram_id
+        WHERE a.is_active = TRUE
+        ORDER BY a.building, a.name
+    """
+    df = _query_to_dataframe(query)
+    if df.empty:
+        return df
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        if "last_update" in df.columns:
+            df["last_update"] = pd.to_datetime(df["last_update"], errors="coerce")
+
+    return df
+
+
+def get_auditory_status_history(auditory_id: int) -> pd.DataFrame:
+    """Возвращает полную историю статусов для выбранной аудитории за последние 90 дней.
+
+    Колонки:
+        - created_at — дата и время отметки;
+        - status — статус (green/yellow/red);
+        - comment — комментарий;
+        - engineer — ФИО инженера.
+    """
+    query = """
+        SELECT
+            sl.created_at,
+            sl.status,
+            sl.comment,
+            u.full_name AS engineer
+        FROM status_log sl
+        JOIN users u ON sl.reported_by = u.telegram_id
+        WHERE sl.auditory_id = %s
+          AND sl.created_at > NOW() - INTERVAL '90 days'
+        ORDER BY sl.created_at DESC
+    """
+    df = _query_to_dataframe(query, (auditory_id,))
+    if df.empty:
+        return df
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+
+    return df
+
+
+def get_auditory_stats(auditory_id: int) -> dict:
+    """Возвращает агрегированную статистику по аудитории за последние 90 дней."""
+    query = """
+        SELECT
+            COUNT(*) AS total_marks,
+            COUNT(CASE WHEN status = 'red' THEN 1 END) AS red_count,
+            COUNT(CASE WHEN status = 'yellow' THEN 1 END) AS yellow_count,
+            COUNT(CASE WHEN status = 'green' THEN 1 END) AS green_count,
+            MIN(created_at) AS first_mark,
+            MAX(created_at) AS last_mark
+        FROM status_log
+        WHERE auditory_id = %s
+          AND created_at > NOW() - INTERVAL '90 days'
+    """
+    df = _query_to_dataframe(query, (auditory_id,))
+    if df.empty:
+        return {
+            "total_marks": 0,
+            "red_count": 0,
+            "yellow_count": 0,
+            "green_count": 0,
+            "first_mark": None,
+            "last_mark": None,
+        }
+
+    row = df.iloc[0]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        first_mark = pd.to_datetime(row.get("first_mark"), errors="coerce")
+        last_mark = pd.to_datetime(row.get("last_mark"), errors="coerce")
+
+    return {
+        "total_marks": int(row.get("total_marks") or 0),
+        "red_count": int(row.get("red_count") or 0),
+        "yellow_count": int(row.get("yellow_count") or 0),
+        "green_count": int(row.get("green_count") or 0),
+        "first_mark": first_mark,
+        "last_mark": last_mark,
+    }
+
