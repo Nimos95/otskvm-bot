@@ -162,6 +162,31 @@ async def afternoon_report_loop(application: Application):
         except Exception as e:
             logger.error(f"Ошибка в цикле дневного отчёта: {e}", exc_info=True)
 
+async def evening_reminder_loop(application: Application):
+    """
+    Цикл для вечернего напоминания менеджеру о назначениях.
+    Запускается в 18:00 каждый день.
+    """
+    while True:
+        try:
+            now = datetime.now()
+            # Вычисляем время до следующего 18:00
+            next_run = now.replace(hour=18, minute=0, second=0, microsecond=0)
+            if now >= next_run:
+                next_run += timedelta(days=1)
+            
+            wait_seconds = (next_run - now).total_seconds()
+            logger.info(f"Вечернее напоминание запланировано через {wait_seconds/3600:.1f} часов")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Отправляем напоминание
+            from services.reminder import send_manager_evening_reminder
+            await send_manager_evening_reminder(application.bot)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в цикле вечернего напоминания: {e}", exc_info=True)
+
 
 async def main() -> None:
     """
@@ -203,6 +228,9 @@ async def main() -> None:
     # Регистрация обработчиков engineer_tasks (отмена и завершение мероприятий)
     register_engineer_tasks(application)
     logger.info("Обработчики engineer_tasks зарегистрированы")
+
+    from handlers.assign import assign_list_handler
+    application.add_handler(CallbackQueryHandler(assign_list_handler, pattern="^assign_list$"))
     
     # Регистрация обработчиков админ-панели (синхронизация, статистика, тесты)
     for pattern, handler in admin_callbacks.items():
@@ -250,6 +278,10 @@ async def main() -> None:
     # Дневной отчёт (в 14:00).
     asyncio.create_task(afternoon_report_loop(application))
     logger.info("Планировщик дневного отчёта запущен")
+
+    # Вечернее напоминание менеджеру (в 18:00)
+    asyncio.create_task(evening_reminder_loop(application))
+    logger.info("Планировщик вечернего напоминания запущен")
 
     try:
         logger.info("Бот запущен")

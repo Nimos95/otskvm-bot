@@ -500,6 +500,16 @@ async def show_assign_list(query, context):
         parse_mode="Markdown"
     )
 
+async def assign_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Показывает список мероприятий для назначения (возврат из callback).
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Используем существующую функцию show_assign_list
+    await show_assign_list(query, context)
+
 
 async def decline_assignment(query, user_id, event_id):
     """

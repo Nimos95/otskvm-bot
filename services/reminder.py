@@ -721,3 +721,124 @@ async def send_unconfirmed_report(bot):
     # мероприятиями.
     logger.info("Отчёт о неподтверждённых будет реализован позже")
     pass
+
+async def find_events_without_assignments() -> List[Dict[str, Any]]:
+    """
+    Находит мероприятия на завтра, у которых нет назначенных инженеров.
+    
+    Returns:
+        List[Dict]: список мероприятий без назначений
+    """
+    pool = get_db_pool()
+    tomorrow = datetime.now().date() + timedelta(days=1)
+    
+    rows = await pool.fetch(
+        """
+        SELECT 
+            ce.id,
+            ce.title,
+            ce.start_time,
+            ce.end_time,
+            a.name as auditory_name,
+            a.building,
+            -- Проверяем, есть ли назначения
+            CASE 
+                WHEN COUNT(ea.id) = 0 THEN 'без назначений'
+                ELSE 'есть назначения'
+            END as assignment_status
+        FROM calendar_events ce
+        LEFT JOIN auditories a ON ce.auditory_id = a.id
+        LEFT JOIN event_assignments ea ON ce.id = ea.event_id 
+            AND ea.status IN ('assigned', 'accepted')
+        WHERE DATE(ce.start_time) = $1
+          AND ce.status = 'confirmed'
+        GROUP BY ce.id, ce.title, ce.start_time, ce.end_time, a.name, a.building
+        HAVING COUNT(ea.id) = 0  -- Только те, у кого нет назначений
+        ORDER BY ce.start_time
+        """,
+        tomorrow
+    )
+    
+    logger.info(f"Найдено мероприятий без назначений на завтра: {len(rows)}")
+    return [dict(row) for row in rows]
+
+
+async def send_manager_evening_reminder(bot):
+    """
+    Отправляет напоминание менеджеру в 18:00 о необходимости раздать назначения на завтра.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from config import config
+    from utils.translit import to_cyrillic
+    from utils.auditory_names import get_russian_name
+    
+    if not config.GROUP_CHAT_ID:
+        logger.warning("GROUP_CHAT_ID не настроен, напоминание не будет отправлено")
+        return
+    
+    # Находим мероприятия без назначений на завтра
+    events = await find_events_without_assignments()
+    
+    if not events:
+        logger.info("На завтра все мероприятия имеют назначения, напоминание не требуется")
+        return
+    
+    # Получаем список менеджеров и суперадминов
+    pool = get_db_pool()
+    managers = await pool.fetch(
+        "SELECT telegram_id FROM users WHERE role IN ('manager', 'superadmin') AND is_active = true"
+    )
+    
+    if not managers:
+        logger.warning("Нет менеджеров для отправки напоминания")
+        return
+    
+    # Формируем сообщение
+    tomorrow_str = (datetime.now().date() + timedelta(days=1)).strftime("%d.%m.%Y")
+    
+    # Список мероприятий
+    events_list = ""
+    for event in events[:5]:  # Показываем первые 5, чтобы не перегружать
+        time_str = event['start_time'].strftime("%H:%M")
+        
+        # 👇 ТРАНСЛИТЕРАЦИЯ НАЗВАНИЯ МЕРОПРИЯТИЯ
+        russian_title = to_cyrillic(event['title'])
+        
+        # Транслитерация аудитории
+        auditory = get_russian_name(event['auditory_name']) if event['auditory_name'] else "ауд. не указана"
+        
+        # 👇 ИСПРАВЛЕНО: используем russian_title вместо event['title']
+        events_list += f"• {time_str} — *{russian_title}* ({auditory})\n"
+
+    if len(events) > 5:
+        events_list += f"• и ещё {len(events) - 5} мероприятий...\n"
+    
+    # Создаём клавиатуру с кнопкой "Назначения"
+    keyboard = [
+        [InlineKeyboardButton("📋 Перейти к назначениям", callback_data="assign_list")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Текст сообщения
+    text = (
+        f"🔔 **Вечернее напоминание**\n\n"
+        f"📅 **Завтра ({tomorrow_str})** запланировано мероприятий: **{len(events)}**\n"
+        f"❌ **Без назначенных инженеров:**\n\n"
+        f"{events_list}\n"
+        f"Пожалуйста, назначьте ответственных до завтрашнего утра."
+    )
+    
+    # Отправляем всем менеджерам
+    for manager in managers:
+        try:
+            await bot.send_message(
+                chat_id=manager['telegram_id'],
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+            logger.info(f"Вечернее напоминание отправлено менеджеру {manager['telegram_id']}")
+        except Exception as e:
+            logger.error(f"Не удалось отправить напоминание менеджеру {manager['telegram_id']}: {e}")
+    
+    

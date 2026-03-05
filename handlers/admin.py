@@ -65,6 +65,7 @@ async def admin_panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton("🌅 Тест утренней сводки", callback_data="admin_test_morning")],
             [InlineKeyboardButton("📊 Тест дневного отчёта", callback_data="admin_test_afternoon")],
             [InlineKeyboardButton("🔄 Тест синхронизации", callback_data="admin_test_sync")],
+            [InlineKeyboardButton("🔔 Тест вечернего напоминания", callback_data="test_evening_reminder")],
         ])
     
     # Кнопка возврата
@@ -503,6 +504,48 @@ async def manage_roles_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("❌ Не удалось изменить роль")
 
+@require_roles(['superadmin'])
+async def test_evening_reminder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Принудительно запускает вечернее напоминание для проверки.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    from services.reminder import send_manager_evening_reminder
+    
+    await query.edit_message_text(
+        "🔔 **Запуск вечернего напоминания...**\n\n"
+        "Проверяю мероприятия на завтра и отправляю уведомления менеджерам.",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        # Запускаем напоминание
+        await send_manager_evening_reminder(context.bot)
+        
+        await query.edit_message_text(
+            "✅ **Тест вечернего напоминания завершён!**\n\n"
+            "Проверьте логи и чат с менеджерами.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+        
+        logger.info(f"Тест вечернего напоминания выполнен пользователем {query.from_user.id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при тесте вечернего напоминания: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ **Ошибка при тестировании**\n\n"
+            f"```\n{str(e)[:200]}\n```",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Назад", callback_data="admin_panel")
+            ]]),
+            parse_mode="Markdown"
+        )
+
 
 # ============================================
 # СЛОВАРЬ ДЛЯ МАППИНГА CALLBACK_DATA
@@ -523,6 +566,7 @@ admin_test_callbacks = {
     "admin_test_morning": admin_test_morning_handler,
     "admin_test_afternoon": admin_test_afternoon_handler,
     "admin_test_sync": admin_test_sync_handler,
+    "test_evening_reminder": test_evening_reminder_handler,
 }
 
 # Объединяем словари
