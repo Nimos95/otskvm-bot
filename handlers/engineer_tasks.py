@@ -241,6 +241,10 @@ async def event_select_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Кнопка назад к списку
     keyboard.append([InlineKeyboardButton("◀️ К списку", callback_data="my_tasks")])
+
+     # Кнопка "Ищу замену" (только для будущих подтверждённых мероприятий)
+    if event['status'] == 'accepted' and event['start_time'] > now:
+        keyboard.append([InlineKeyboardButton("🔄 Ищу замену", callback_data="event_replace")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -708,6 +712,88 @@ async def back_to_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     return ConversationHandler.END  # Завершаем разговор, если были в нём
 
+async def event_replace_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обработчик кнопки "Ищу замену".
+    Отправляет уведомление менеджерам о том, что инженер ищет замену.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    event_id = context.user_data.get('selected_event_id')
+    if not event_id:
+        await query.edit_message_text("❌ Ошибка: не выбран ID мероприятия")
+        return ConversationHandler.END
+    
+    user_id = query.from_user.id
+    pool = get_db_pool()
+    
+    # Получаем информацию о мероприятии и инженере
+    event_info = await pool.fetchrow(
+        """
+        SELECT 
+            ce.title,
+            ce.start_time,
+            u.full_name as engineer_name
+        FROM calendar_events ce
+        JOIN event_assignments ea ON ce.id = ea.event_id
+        JOIN users u ON ea.assigned_to = u.telegram_id
+        WHERE ce.id = $1 AND ea.assigned_to = $2
+        """,
+        event_id, user_id
+    )
+    
+    if not event_info:
+        await query.edit_message_text("❌ Мероприятие не найдено")
+        return ConversationHandler.END
+    
+    # Обновляем статус назначения на 'replacing'
+    await pool.execute(
+        """
+        UPDATE event_assignments 
+        SET status = 'replacing'
+        WHERE event_id = $1 AND assigned_to = $2
+        """,
+        event_id, user_id
+    )
+    
+    # Получаем список менеджеров
+    managers = await pool.fetch(
+        "SELECT telegram_id FROM users WHERE role IN ('manager', 'superadmin') AND is_active = true"
+    )
+    
+    # Форматируем время
+    time_str = event_info['start_time'].strftime("%d.%m.%Y %H:%M")
+    russian_title = to_cyrillic(event_info['title'])
+    
+    # Уведомление менеджерам
+    for manager in managers:
+        try:
+            await context.bot.send_message(
+                chat_id=manager['telegram_id'],
+                text=(
+                    f"🔄 **Инженер ищет замену**\n\n"
+                    f"👤 Инженер: {event_info['engineer_name']}\n"
+                    f"📅 Мероприятие: {russian_title}\n"
+                    f"🕐 Время: {time_str}\n\n"
+                    f"Требуется найти замену."
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить менеджера {manager['telegram_id']}: {e}")
+    
+    # Подтверждение инженеру
+    await query.edit_message_text(
+        f"🔄 Запрос на замену отправлен менеджерам.\n\n"
+        f"Мероприятие: *{russian_title}*\n"
+        f"Время: {time_str}",
+        parse_mode="Markdown"
+    )
+    
+    logger.info(f"Пользователь {user_id} запросил замену на мероприятие {event_id}")
+    return ConversationHandler.END
+
 
 def register_handlers(app):
     """
@@ -731,12 +817,14 @@ def register_handlers(app):
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(event_complete_handler, pattern=r'^event_complete$'),
-            CallbackQueryHandler(event_cancel_start, pattern=r'^event_cancel$')
+            CallbackQueryHandler(event_cancel_start, pattern=r'^event_cancel$'),
+            CallbackQueryHandler(event_replace_handler, pattern=r'^event_replace$')  # 👈 ДОБАВИТЬ
         ],
         states={
             SELECTING_ACTION: [
                 CallbackQueryHandler(event_complete_handler, pattern=r'^event_complete$'),
-                CallbackQueryHandler(event_cancel_start, pattern=r'^event_cancel$')
+                CallbackQueryHandler(event_cancel_start, pattern=r'^event_cancel$'),
+                CallbackQueryHandler(event_replace_handler, pattern=r'^event_replace$')  # 👈 ДОБАВИТЬ
             ],
             CANCEL_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, event_cancel_reason)],
         },

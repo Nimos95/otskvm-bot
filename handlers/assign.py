@@ -189,7 +189,12 @@ async def show_engineers_for_event(query, event_id):
     )
     
     if not event_row:
-        await query.edit_message_text("Мероприятие не найдено")
+        await query.edit_message_text(
+            "❌ Мероприятие не найдено или уже завершено",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« К списку мероприятий", callback_data="assign_list")
+            ]])
+        )
         return
     
     # Получаем список инженеров и статусы их назначений по данному событию.
@@ -246,6 +251,8 @@ async def show_engineers_for_event(query, event_id):
             btn_text = f"⏳ {name} (ожидает ответа)"
         elif status == "done":
             btn_text = f"✔️ {name} (выполнил)"
+        elif status == "replacing":
+            btn_text = f"🔄 {name} (ищет замену)"
         else:
             btn_text = f"👤 {name}"
         
@@ -268,6 +275,25 @@ async def show_engineers_for_event(query, event_id):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # 🔥 ЗАЩИТА ОТ ОШИБКИ "Message is not modified"
+    current_text = query.message.text
+    current_reply_markup = query.message.reply_markup
+    
+    # Функция сравнения клавиатур (упрощённая)
+    def keyboards_are_equal(kb1, kb2):
+        if kb1 is None and kb2 is None:
+            return True
+        if kb1 is None or kb2 is None:
+            return False
+        return str(kb1.to_dict()) == str(kb2.to_dict())
+    
+    # Если ничего не изменилось — не редактируем
+    if current_text == text and keyboards_are_equal(current_reply_markup, reply_markup):
+        logger.debug(f"show_engineers_for_event: сообщение не изменилось, пропускаем edit для мероприятия {event_id}")
+        await query.answer()
+        return
+    
+    # Только если есть изменения — редактируем
     await query.edit_message_text(
         text,
         reply_markup=reply_markup,
