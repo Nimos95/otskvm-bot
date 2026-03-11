@@ -4,9 +4,9 @@
 
 ## Требования
 
-- Python 3.10+
+- Python 3.10+ (рекомендуется **Python 3.12**, т.к. на Python 3.14 возможны ошибки совместимости `streamlit`/`protobuf`)
 - Доступ к той же PostgreSQL, что и бот (переменная `DATABASE_URL` в `.env` в корне проекта)
-- Зависимости: см. `streamlit_dashboard/requirements.txt` (включая `streamlit>=1.33`, `pandas>=2.1`, `plotly`, `psycopg2-binary`, `python-dotenv`)
+- Зависимости: см. `streamlit_dashboard/requirements.txt` (включая `streamlit>=1.33`, `pandas>=2.1`, `plotly`, `psycopg2-binary`, `python-dotenv`, `cyrtranslit`)
 
 ## Установка зависимостей
 
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 Из **корня проекта** (обязательно, чтобы подхватился `.env` и путь к модулям):
 
 ```bash
-streamlit run "streamlit_dashboard/Стартовая_страница.py" --server.port 8503
+python -m streamlit run "streamlit_dashboard/Стартовая_страница.py" --server.port 8503
 ```
 
 Или скриптами из папки дашборда:
@@ -45,6 +45,7 @@ streamlit run "streamlit_dashboard/Стартовая_страница.py" --ser
 | `pages/01_Активность.py` | Активность: фильтры, KPI, графики, таблица по инженерам |
 | `pages/02_Инженеры.py` | Детализация по выбранному инженеру |
 | `pages/03_Экспорт.py` | Экспорт данных в CSV |
+| `pages/04_Аудитории.py` | Состояние аудиторий: таблица, карточка, история статусов и статистика |
 | `components/filters.py` | Боковая панель с фильтрами |
 | `components/charts.py` | Графики (линейный, топ-10, тепловая карта) |
 | `components/metrics.py` | KPI-карточки |
@@ -52,6 +53,8 @@ streamlit run "streamlit_dashboard/Стартовая_страница.py" --ser
 | `database/queries.py` | Только SELECT-запросы, кэш 5 мин |
 | `utils/constants.py` | Копия констант из `core/constants.py` |
 | `utils/formatting.py` | Форматирование дат и имён |
+| `utils/translit.py` | Транслитерация (латиница/кириллица) через `cyrtranslit` |
+| `utils/auditory_names.py` | Словарь особых названий аудиторий/корпусов + `get_russian_name()` |
 
 ## Поведение
 
@@ -60,6 +63,9 @@ streamlit run "streamlit_dashboard/Стартовая_страница.py" --ser
 - Доступ к данным — через `psycopg2` (курсор + `fetchall`) с преобразованием в `pandas.DataFrame`, без изменения данных.
 - Кэширование данных: `@st.cache_data(ttl=300)` (5 минут).
 - Не импортируются модули из основной папки бота.
+- Названия корпусов и аудиторий в интерфейсе отображаются **на русском**:
+  - через `utils/auditory_names.get_russian_name()` для известных/особых названий (например, `GUK → ГУК`, `Belый zal → Белый зал`);
+  - для текстов, пришедших в латинице (например, названия мероприятий из внешних систем), используется `utils/translit.to_cyrillic()`.
 
 ## Страница «Активность»
 
