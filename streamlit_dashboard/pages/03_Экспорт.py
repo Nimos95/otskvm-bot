@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from database.queries import get_activity
+from utils.auditory_names import get_russian_name
 from utils.formatting import format_date_range
 
 
@@ -31,6 +32,10 @@ df = get_activity(start, end, engineer_ids=None, building=None)
 if df.empty:
     st.info("Нет данных за выбранный период.")
     st.stop()
+
+if "building" in df.columns:
+    df = df.copy()
+    df["building"] = df["building"].astype(str).apply(get_russian_name)
 
 st.caption(f"Период: {format_date_range(start, end)}. Записей: {len(df)}.")
 

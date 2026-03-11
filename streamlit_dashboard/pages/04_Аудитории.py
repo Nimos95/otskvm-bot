@@ -22,6 +22,8 @@ from database.queries import (
     get_auditory_stats,
     get_auditory_status_history,
 )
+from utils.auditory_names import get_russian_name
+from utils.translit import to_cyrillic
 
 
 STATUS_LABELS: Dict[str, str] = {
@@ -80,7 +82,13 @@ with st.sidebar:
     search_text = st.text_input("Поиск по названию аудитории", key="auditory_search").strip()
 
     building_options = ["Все корпуса"] + buildings
-    selected_building = st.selectbox("Корпус", options=building_options, index=0, key="auditory_building")
+    selected_building = st.selectbox(
+        "Корпус",
+        options=building_options,
+        index=0,
+        key="auditory_building",
+        format_func=lambda x: x if x == "Все корпуса" else get_russian_name(str(x)),
+    )
 
     status_filter_options = {
         "all": "Все статусы",
@@ -116,7 +124,12 @@ if aud_df.empty:
 filtered_df = aud_df.copy()
 
 if search_text:
-    mask = filtered_df["name"].astype(str).str.contains(search_text, case=False, na=False)
+    mask = (
+        filtered_df["name"]
+        .astype(str)
+        .apply(get_russian_name)
+        .str.contains(search_text, case=False, na=False)
+    )
     filtered_df = filtered_df[mask]
 
 if selected_building != "Все корпуса":
@@ -138,8 +151,8 @@ with col_left:
     display_df = filtered_df.copy()
     display_df["Статус"] = display_df["current_status"].apply(_status_to_label)
     display_df["Последнее обновление"] = display_df["last_update"].apply(_format_datetime_short)
-    display_df["Корпус"] = display_df["building"].astype(str)
-    display_df["Аудитория"] = display_df["name"].astype(str)
+    display_df["Корпус"] = display_df["building"].astype(str).apply(get_russian_name)
+    display_df["Аудитория"] = display_df["name"].astype(str).apply(get_russian_name)
 
     display_columns = [
         "Корпус",
@@ -159,7 +172,10 @@ with col_left:
     # Выбор аудитории для подробного просмотра
     options = []
     for _, row in filtered_df.iterrows():
-        label = f"{row.get('building', '')} — {row.get('name', '')}"
+        label = (
+            f"{get_russian_name(str(row.get('building', '') or ''))}"
+            f" — {get_russian_name(str(row.get('name', '') or ''))}"
+        )
         options.append((row["id"], label))
 
     if options:
@@ -188,8 +204,8 @@ with col_right:
             last_update_display = _format_datetime_short(row.get("last_update"))
 
             render_auditory_card(
-                name=str(row.get("name") or ""),
-                building=str(row.get("building") or ""),
+                name=get_russian_name(str(row.get("name") or "")),
+                building=get_russian_name(str(row.get("building") or "")),
                 floor=row.get("floor"),
                 equipment=row.get("equipment"),
                 status_display=status_display,
@@ -218,7 +234,15 @@ with col_right:
                 history_table = history_df.copy()
                 history_table["Дата и время"] = history_table["created_at"].apply(_format_datetime_short)
                 history_table["Статус"] = history_table["status"].apply(_status_to_label)
-                history_table = history_table[["Дата и время", "Статус", "comment", "engineer"]].rename(
+                if "event_title" in history_table.columns:
+                    history_table["Мероприятие"] = history_table["event_title"].apply(
+                        lambda x: to_cyrillic(x) if x else ""
+                    )
+                    cols = ["Дата и время", "Статус", "Мероприятие", "comment", "engineer"]
+                else:
+                    cols = ["Дата и время", "Статус", "comment", "engineer"]
+
+                history_table = history_table[cols].rename(
                     columns={
                         "comment": "Комментарий",
                         "engineer": "Инженер",

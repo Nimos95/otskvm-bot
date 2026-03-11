@@ -15,6 +15,7 @@ import streamlit as st
 
 from database.queries import get_active_engineers, get_activity
 from utils.formatting import format_engineer_name, format_datetime
+from utils.auditory_names import get_russian_name
 
 
 st.set_page_config(page_title="Инженеры | OTSKVM Bot", page_icon="👤", layout="wide")
@@ -66,6 +67,7 @@ c4.metric("Последняя активность", format_datetime(last_ts))
 st.subheader("Записи активности")
 df_display = df[["created_at", "activity_date", "activity_hour", "building"]].copy()
 df_display["created_at"] = df_display["created_at"].apply(format_datetime)
+df_display["building"] = df_display["building"].astype(str).apply(get_russian_name)
 df_display.columns = ["Дата и время", "Дата", "Час", "Корпус"]
 st.dataframe(df_display, width="stretch", hide_index=True)
 

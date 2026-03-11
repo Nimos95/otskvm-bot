@@ -2,7 +2,7 @@
 asyncpg==0.31.0
 
 # cyrtranslit — транслитерация кириллицы в латиницу
-cyrtranslit==1.1.1
+cyrtranslit==1.2.0
 
 # google-api-python-client — клиент для Google APIs (в т.ч. Calendar)
 google-api-python-client==2.169.0
