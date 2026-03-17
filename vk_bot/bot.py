@@ -19,13 +19,16 @@ VK_TOKEN = os.getenv("VK_TOKEN")
 # Создаём экземпляр бота
 bot = Bot(VK_TOKEN)
 
-@bot.on.message(text="start")
+# ============================================
+# ОБРАБОТЧИКИ ДЛЯ ЛИЧНЫХ СООБЩЕНИЙ
+# ============================================
+
+@bot.on.private_message(text="start")
 async def start_handler(message: Message):
     """Обработчик команды start"""
     user_id = message.from_id
     logger.info(f"Пользователь {user_id} запустил бота")
     
-    # Создаём клавиатуру
     keyboard = (
         Keyboard()
         .add(Text("📋 Мои мероприятия"), color=KeyboardButtonColor.PRIMARY)
@@ -43,7 +46,7 @@ async def start_handler(message: Message):
         keyboard=keyboard
     )
 
-@bot.on.message(text="📋 Мои мероприятия")
+@bot.on.private_message(text="📋 Мои мероприятия")
 async def my_events_handler(message: Message):
     """Показывает мероприятия инженера"""
     user_id = message.from_id
@@ -55,7 +58,7 @@ async def my_events_handler(message: Message):
         "Пока нет мероприятий. Эта функциональность в разработке."
     )
 
-@bot.on.message(text="📅 Сегодня")
+@bot.on.private_message(text="📅 Сегодня")
 async def today_handler(message: Message):
     """Мероприятия на сегодня"""
     await message.answer(
@@ -63,7 +66,7 @@ async def today_handler(message: Message):
         "Раздел в разработке."
     )
 
-@bot.on.message(text="📊 Статусы")
+@bot.on.private_message(text="📊 Статусы")
 async def status_handler(message: Message):
     """Статусы аудиторий"""
     await message.answer(
@@ -71,7 +74,7 @@ async def status_handler(message: Message):
         "Раздел в разработке."
     )
 
-@bot.on.message(text="❓ Помощь")
+@bot.on.private_message(text="❓ Помощь")
 async def help_handler(message: Message):
     """Справка"""
     await message.answer(
@@ -82,30 +85,44 @@ async def help_handler(message: Message):
         "Разработка ведётся активно, скоро появятся новые функции!"
     )
 
-@bot.on.message()
-async def echo_handler(message: Message):
+@bot.on.private_message()
+async def fallback_handler(message: Message):
     """Обработчик неизвестных команд"""
     await message.answer(
-        "❌ Неизвестная команда. Напишите start для начала работы."
+        "❌ Неизвестная команда. Напишите 'start' для начала работы."
     )
 
-# 🔥 ПРАВИЛЬНЫЙ СПОСОБ ДЛЯ VKBOTTLE 4.x [citation:2]
-async def startup():
-    """Действия при запуске бота"""
-    logger.info("🚀 VK бот запускается...")
-    await Database.connect()
-    logger.info("✅ VK бот готов к работе")
+# ============================================
+# ОБРАБОТЧИК ДЛЯ ЧАТОВ (МОЛЧИМ)
+# ============================================
 
-async def shutdown():
-    """Действия при остановке бота"""
-    logger.info("🛑 VK бот останавливается...")
-    await Database.disconnect()
-    logger.info("👋 VK бот остановлен")
+@bot.on.chat_message()
+async def chat_message_handler(message: Message):
+    """Игнорируем все сообщения в чатах"""
+    logger.debug(f"Сообщение в чате {message.peer_id} проигнорировано")
+    return
 
-# Добавляем функции в списки on_startup и on_shutdown
-bot.loop_wrapper.on_startup.append(startup())
-bot.loop_wrapper.on_shutdown.append(shutdown())
+# ============================================
+# ЗАПУСК БОТА (УПРОЩЁННЫЙ ВАРИАНТ)
+# ============================================
 
 if __name__ == "__main__":
-    # Запускаем бота [citation:2]
-    bot.run_forever()
+    import asyncio
+    
+    # Создаём событийный цикл
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Подключаемся к БД
+    loop.run_until_complete(Database.connect())
+    logger.info("🔥 VK бот запускается...")
+    
+    try:
+        # Запускаем бота
+        bot.run_forever()
+    except KeyboardInterrupt:
+        logger.info("👋 Бот остановлен пользователем")
+    finally:
+        # Отключаемся от БД
+        loop.run_until_complete(Database.disconnect())
+        loop.close()
